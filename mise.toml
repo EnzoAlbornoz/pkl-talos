@@ -1,0 +1,41 @@
+min_version = "2025.1.0"
+
+[tools]
+pkl = "0.32.1"
+# Used by the e2e tests, which run the talosctl release that matches $TALOS_VERSION.
+talosctl = "1.14.4"
+actionlint = "1.7.12"
+zizmor = "1.31.1"
+
+[env]
+# Talos release that `mise run generate` and the tests use; override it to work on another line,
+# for example `TALOS_VERSION=1.13.11 mise run test`.
+TALOS_VERSION = "1.14.4"
+
+[tasks.fmt]
+description = "Format the hand-written Pkl sources"
+run = "pkl format --write generator package tests examples"
+
+[tasks."lint:pkl"]
+description = "Check that the hand-written Pkl sources are formatted"
+run = "pkl format --diff-name-only generator package tests examples"
+
+[tasks."lint:actions"]
+description = "Lint the GitHub Actions workflows"
+run = ["actionlint", "zizmor --offline .github"]
+
+[tasks.lint]
+description = "Run every linter"
+depends = ["lint:*"]
+
+[tasks."test:generator"]
+description = "Run the generator unit tests"
+run = "pkl test generator/tests/*.pkl"
+
+[tasks.test]
+description = "Run every test against the package for $TALOS_VERSION"
+depends = ["generate", "test:generator", "test:package", "test:e2e", "test:examples"]
+
+[tasks.ci]
+description = "Run what CI runs for one Talos line"
+depends = ["lint", "test"]

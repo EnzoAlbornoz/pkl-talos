@@ -1,0 +1,10 @@
+# Generated packages, release files and end-to-end scratch output
+/build/
+/tests/e2e/**/.out/
+
+# Pkl project lock files of projects that depend on the local build
+/tests/PklProject.deps.json
+/examples/PklProject.deps.json
+
+# Talos secrets bundles, such as the one the complete configuration example reads
+secrets.yaml
