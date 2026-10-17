@@ -1,0 +1,28 @@
+amends "pkl:test"
+
+import "../src/names.pkl"
+
+facts {
+  ["identifiers that are keywords or not plain get backticks"] {
+    names.identifier("mtu") == "mtu"
+    names.identifier("local") == "`local`"
+    names.identifier("tcp-data-split") == "`tcp-data-split`"
+    names.identifier("$patch") == "`$patch`"
+  }
+
+  ["names in PascalCase"] {
+    names.pascal("ca") == "Ca"
+    names.pascal("acceptedCAs") == "AcceptedCAs"
+    names.pascal("tcp-data-split") == "TcpDataSplit"
+  }
+
+  ["string literals are escaped"] {
+    names.stringLiteral(#"a "b" \c"#) == #""a \"b\" \\c""#
+    names.stringLiteral("a\nb") == #""a\nb""#
+  }
+
+  ["raw string literals use enough pound signs"] {
+    names.rawStringLiteral(#"^\d+$"#) == ##"#"^\d+$"#"##
+    names.rawStringLiteral(##"a"#b"##) == ###"##"a"#b"##"###
+  }
+}

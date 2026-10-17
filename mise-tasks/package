@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+#MISE description="Package build/talos for publishing into build/release/<name>@<version>/"
+#MISE wait_for=["generate"]
+set -euo pipefail
+
+if [[ ! -f build/talos/PklProject ]]; then
+  echo "build/talos has no package; run 'mise run generate' first." >&2
+  exit 1
+fi
+
+# The package's own tests are in tests/, which `mise run test` runs; the publish check makes sure
+# that no published package of the same version has a different checksum.
+pkl project package build/talos --output-path 'build/release/%{name}@%{version}'

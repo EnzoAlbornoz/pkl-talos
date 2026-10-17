@@ -1,0 +1,113 @@
+/// Tests of the generator, on a small schema with every construct that Talos uses.
+amends "pkl:test"
+
+import "pkl:test"
+
+import "../src/Generator.pkl"
+import "../src/json.pkl"
+
+local fixture: Map = json.parse(read("fixtures/schema.json").text) as Map
+
+local generated: Generator = (Generator) {
+  talosVersion = "v0.0.1"
+  schemaUrl = "https://example.com/config.schema.json"
+  schema = fixture
+  supportFiles = Map("patch.pkl", "// support\n")
+}
+
+/// [fixture] with [def] replaced by [node].
+local function withDef(def: String, node: Map): Map =
+  fixture.put("$defs", fixture["$defs"].put(def, node))
+
+facts {
+  ["one module per document, one per group of types"] {
+    generated.files.keys.toList().sort()
+      == List(
+        "PklProject",
+        "example.pkl",
+        "example/GadgetConfig.pkl",
+        "example/WidgetConfig.pkl",
+        "patch.pkl",
+        "v1alpha1.pkl",
+        "v1alpha1/Config.pkl",
+        "version.pkl",
+      )
+  }
+
+  ["unused definitions are left out"] {
+    !generated.files["example.pkl"].contains("class Unused")
+  }
+
+  ["upstream schema errors are fixed"] {
+    generated.appliedFixes
+      == List(
+        "v1alpha1.MachineConfig.acceptedCAs: object -> list",
+        "v1alpha1.Endpoint: object -> string",
+      )
+    generated.files["v1alpha1.pkl"].contains(
+      "acceptedCAs: (*Listing<MachineConfigAcceptedCAs> | patch.Delete)?",
+    )
+    generated.files["v1alpha1.pkl"].contains("endpoint: (String | patch.Delete)?")
+    !generated.files["v1alpha1.pkl"].contains("class Endpoint")
+  }
+
+  ["the package version defaults to a development version of the Talos line"] {
+    generated.packageVersion == "0.0.0-dev"
+    generated.talos == "0.0.1"
+    generated.talosLine == "0.0"
+  }
+
+  ["the digest covers the modules, not the package version"] {
+    generated.digest == (generated) { packageVersion = "0.0.7" }.digest
+    generated.digest != (generated) { supportFiles = Map("patch.pkl", "// changed\n") }.digest
+    generated.digest.startsWith("sha256:")
+  }
+
+  ["the package is published from the repository's releases"] {
+    generated.files["PklProject"].contains(
+      #"baseUri = "package://github.com/EnzoAlbornoz/pkl-talos/releases/download/talos@\(version)/talos""#,
+    )
+    (generated) { repository = "someone/fork" }.files["PklProject"].contains(
+      "package://github.com/someone/fork/releases",
+    )
+  }
+
+  ["unsupported schema constructs stop the generation"] {
+    let (
+      broken = (generated) {
+        schema =
+          withDef(
+            "example.Part",
+            fixture["$defs"]["example.Part"].put(
+              "properties",
+              Map("odd", Map("allOf", List(), "type", "string")),
+            ),
+          )
+      }
+    )
+      test.catch(() -> broken.files).contains("example.Part.odd: unsupported keyword `allOf`")
+  }
+}
+
+examples {
+  ["document module"] {
+    generated.files["example/WidgetConfig.pkl"]
+  }
+
+  ["document module with free-form data and durations"] {
+    generated.files["example/GadgetConfig.pkl"]
+  }
+
+  ["types module"] {
+    generated.files["example.pkl"]
+  }
+
+  ["legacy document"] {
+    generated.files["v1alpha1/Config.pkl"]
+    generated.files["v1alpha1.pkl"]
+  }
+
+  ["version module"] {
+    generated.files["version.pkl"]
+  }
+}

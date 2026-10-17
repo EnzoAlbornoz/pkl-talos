@@ -1,0 +1,40 @@
+/// Types, annotations and converters that the generated modules share.
+module talos.schema
+
+/// Marks a property that Talos requires in a complete machine configuration.
+///
+/// Patches can leave it out. `MachineConfig.pkl` reports the required properties that are missing.
+class Required extends Annotation
+
+/// A Go duration, such as `"1m30s"`, or a Pkl [Duration], which renders as a Go duration.
+typealias GoDuration =
+  Duration | String(matches(Regex(#"[-+]?(((\d+(\.\d*)?|\d*(\.\d+)+)([nuµm]?s|m|h))|0)+"#)))
+
+/// Free-form data, such as a Kubernetes manifest: a [Dynamic], a [Mapping], or any typed object.
+typealias Unstructured = *Dynamic | Mapping<String, Any> | Typed
+
+local goUnits: List<Pair<String, Int>> =
+  List(
+    Pair("h", 3600000000000),
+    Pair("m", 60000000000),
+    Pair("s", 1000000000),
+    Pair("ms", 1000000),
+    Pair("us", 1000),
+    Pair("ns", 1),
+  )
+
+/// [duration] as a Go duration string, in the largest unit that keeps it whole: `90.s` is `"90s"`,
+/// `1.5.h` is `"90m"` and `2.d` is `"48h"`.
+function goDuration(duration: Duration): String =
+  let (value = duration.toUnit("ns").value)
+  let (ns = if (value is Int) value else value.round().toInt())
+    if (ns == 0)
+      "0s"
+    else
+      let (unit = goUnits.find((it) -> ns % it.second == 0))
+        "\(ns ~/ unit.second)\(unit.first)"
+
+/// The value converters of this package's renderers.
+converters: Mapping<Class | String, (unknown) -> Any> = new {
+  [Duration] = (it: Duration) -> goDuration(it)
+}

@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+#MISE description="Generate the package for a Talos release into build/talos"
+#USAGE arg "[talos]" help="Talos release, such as 1.14.4 (default: $TALOS_VERSION)"
+#USAGE flag "--version <version>" help="Version of the generated package (default: <major>.<minor>.0-dev)"
+#USAGE flag "--schema <uri>" help="Read the schema from this URI instead of the Talos repository"
+#USAGE flag "--out <dir>" default="build/talos" help="Directory to write the package to"
+set -euo pipefail
+
+talos="${usage_talos:-$TALOS_VERSION}"
+out="${usage_out:-build/talos}"
+
+args=(-p "talosVersion=$talos")
+[[ -n "${usage_version:-}" ]] && args+=(-p "packageVersion=$usage_version")
+[[ -n "${usage_schema:-}" ]] && args+=(-p "schema=$usage_schema")
+
+rm -rf "$out"
+pkl eval -m "$out" generator/generate.pkl "${args[@]}" >/dev/null
+# The generator writes valid but unformatted code; the formatter wraps long lines.
+pkl format --write "$out" >/dev/null
+
+echo "Generated $(find "$out" -name '*.pkl' | wc -l | tr -d ' ') modules for Talos $talos in $out"

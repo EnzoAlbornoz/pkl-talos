@@ -1,0 +1,186 @@
+/// Decides which package versions to publish.
+///
+/// Each Talos minor line (`1.14`, ...) has its own package versions, `talos@<line>.<n>`. The package
+/// of a line follows the line's latest Talos release; `<n>` counts the packages of the line. A line
+/// gets a new package when the package it would generate differs from its latest published one:
+/// because Talos released a new patch version, or because the generator changed.
+///
+/// Each release records the Talos version and the package digest in a comment of its notes (see
+/// [stateMarker]), which the next plan compares against.
+module pkltalos.generator.Planner
+
+import "pkl:semver"
+
+import "json.pkl"
+
+/// Releases of Talos, as the GitHub API lists them (`tag_name`, `draft`, `prerelease`).
+talosReleases: List<Map>
+
+/// Releases of this repository, as the GitHub API lists them (`tag_name`, `draft`, `body`).
+publishedReleases: List<Map>
+
+/// The oldest Talos version to publish packages for: the first with `$patch: delete`.
+minimum: String = "1.8.0"
+
+/// Talos lines (`major.minor`) to plan for; all of them if empty.
+lines: List<String> = List()
+
+/// Whether to publish packages for lines that only have pre-releases so far.
+includePrereleases: Boolean = false
+
+/// The digest of the package that the generator produces for a Talos version.
+digestOf: (String) -> String
+
+/// A package version to publish.
+class Release {
+  /// Talos line, such as `"1.14"`.
+  line: String
+
+  /// Talos version to generate the package from, without the `v` prefix.
+  talos: String
+
+  /// Version of the package.
+  version: String
+
+  /// Digest of the package.
+  digest: String
+
+  /// Whether this is a pre-release, made from a Talos pre-release.
+  prerelease: Boolean
+
+  /// Whether GitHub shows this release as the latest one.
+  latest: Boolean
+
+  /// Why the package is published.
+  reason: String
+}
+
+/// The package versions to publish, oldest line first.
+fixed releases: List<Release> =
+  let (planned = candidateLines.map((it) -> plan(it)).filterNonNull())
+  let (
+    newest =
+      (planned.map((it) -> it.line) + publishedStableLines)
+        .sortWith((a, b) -> isLineBefore(a, b))
+        .lastOrNull
+  )
+    planned.map((it) -> (it) { latest = !it.prerelease && it.line == newest })
+
+/// The newest stable Talos release of every line, oldest line first: what CI tests.
+fixed targets: List<String> =
+  candidateLines
+    .map((line) -> newest(talosVersions.filter((it) -> lineOf(it) == line && it.preRelease == null)))
+    .filterNonNull()
+    .map((it) -> it.toString())
+
+/// The `<!-- pkl-talos {...} -->` comment that records [talos] and [digest] in release notes.
+function stateMarker(talos: String, digest: String): String =
+  "<!-- pkl-talos {\"talos\":\"\(talos)\",\"digest\":\"\(digest)\"} -->"
+
+local markerPattern: Regex = Regex(#"<!-- pkl-talos (\{.*\}) -->"#)
+
+local class Published {
+  version: semver.Version
+  talos: String?
+  digest: String?
+}
+
+local published: List<Published> =
+  publishedReleases
+    .filter((it) -> it.getOrNull("draft") != true && (it["tag_name"] as String).startsWith("talos@"))
+    .map((it) ->
+      let (
+        state =
+          markerPattern
+            .findMatchesIn(it.getOrNull("body") ?? "")
+            .firstOrNull
+            ?.groups
+            ?.getOrNull(1)
+            ?.value
+      )
+      let (data = if (state == null) null else json.parse(state) as Map)
+        new Published {
+          version = semver.Version((it["tag_name"] as String).drop("talos@".length))
+          talos = data?.getOrNull("talos")
+          digest = data?.getOrNull("digest")
+        })
+
+local publishedStableLines: List<String> =
+  published
+    .filter((it) -> it.version.preRelease == null)
+    .map((it) -> lineOf(it.version))
+
+local talosVersions: List<semver.Version> =
+  talosReleases
+    .filter((it) -> it.getOrNull("draft") != true)
+    .map((it) -> semver.parseOrNull((it["tag_name"] as String).replaceFirst(Regex("^v"), "")))
+    .filterNonNull()
+    .filter((it) -> !it.isLessThan(semver.Version(minimum)))
+
+local candidateLines: List<String> =
+  talosVersions
+    .map((it) -> lineOf(it))
+    .distinct
+    .filter((it) -> lines.isEmpty || lines.contains(it))
+    .sortWith((a, b) -> isLineBefore(a, b))
+
+local function lineOf(version: semver.Version): String = "\(version.major).\(version.minor)"
+
+local function isLineBefore(a: String, b: String): Boolean =
+  semver.Version("\(a).0").isLessThan(semver.Version("\(b).0"))
+
+local function newest(versions: List<semver.Version>): semver.Version? =
+  versions.fold(null, (acc, it) -> if (acc == null || acc.isLessThan(it)) it else acc)
+
+/// The package to publish for [talosLine], if any.
+///
+/// Inside `new Release { ... }`, names resolve to the object's own properties first, so the local
+/// names here differ from the property names.
+local function plan(talosLine: String): Release? =
+  let (inLine = talosVersions.filter((it) -> lineOf(it) == talosLine))
+  let (stable = newest(inLine.filter((it) -> it.preRelease == null)))
+  let (target = stable ?? (if (includePrereleases) newest(inLine) else null))
+    if (target == null)
+      null
+    else
+      let (isPrerelease = stable == null)
+      let (
+        ours =
+          published.filter((it) ->
+            lineOf(it.version) == talosLine && (it.version.preRelease != null) == isPrerelease
+          )
+      )
+      let (last = ours.sortWith((a, b) -> a.version.isLessThan(b.version)).lastOrNull)
+      let (targetVersion = target.toString())
+      let (targetDigest = digestOf.apply(targetVersion))
+        if (last != null && last.digest == targetDigest)
+          null
+        else
+          new Release {
+            line = talosLine
+            talos = targetVersion
+            version = nextVersion(talosLine, last?.version, isPrerelease)
+            digest = targetDigest
+            prerelease = isPrerelease
+            latest = false
+            reason =
+              if (last == null)
+                "first package of the Talos \(talosLine) line"
+              else if (last.talos != targetVersion)
+                "Talos \(targetVersion) was released"
+              else
+                "the generator changed"
+          }
+
+/// `<line>.0` for the first package of a line, then the next patch version; pre-releases count
+/// `<line>.0-pre.<n>`.
+local function nextVersion(line: String, last: semver.Version?, prerelease: Boolean): String =
+  if (prerelease)
+    if (last == null)
+      "\(line).0-pre.0"
+    else
+      "\(line).0-pre.\(last.preRelease!!.split(".").last.toInt() + 1)"
+  else if (last == null)
+    "\(line).0"
+  else
+    "\(line).\(last.patch + 1)"

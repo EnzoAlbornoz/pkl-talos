@@ -1,0 +1,123 @@
+/// Naming rules: how schema names become Pkl identifiers, class names and literals.
+module pkltalos.generator.names
+
+/// Pkl keywords and reserved words, which can only be identifiers inside backticks.
+const keywords: Set<String> =
+  Set(
+    "abstract",
+    "amends",
+    "as",
+    "case",
+    "class",
+    "const",
+    "delete",
+    "else",
+    "extends",
+    "external",
+    "false",
+    "fixed",
+    "for",
+    "function",
+    "hidden",
+    "if",
+    "import",
+    "in",
+    "is",
+    "let",
+    "local",
+    "module",
+    "new",
+    "nothing",
+    "null",
+    "open",
+    "out",
+    "outer",
+    "override",
+    "protected",
+    "public",
+    "read",
+    "record",
+    "super",
+    "switch",
+    "this",
+    "throw",
+    "trace",
+    "true",
+    "typealias",
+    "unknown",
+    "vararg",
+    "when",
+  )
+
+/// Names of `pkl:base` types, which generated classes must not shadow.
+const baseTypes: Set<String> =
+  Set(
+    "Any",
+    "Annotation",
+    "Boolean",
+    "Bytes",
+    "Class",
+    "DataSize",
+    "Duration",
+    "Dynamic",
+    "Float",
+    "Function",
+    "Int",
+    "IntSeq",
+    "List",
+    "Listing",
+    "Map",
+    "Mapping",
+    "Module",
+    "Null",
+    "Number",
+    "Object",
+    "Pair",
+    "Regex",
+    "Resource",
+    "Set",
+    "String",
+    "Typed",
+    "TypeAlias",
+  )
+
+local const plainIdentifier: Regex = Regex(#"[A-Za-z_][A-Za-z0-9_]*"#)
+
+/// Tells if [name] can be written as an identifier without backticks.
+const function isPlainIdentifier(name: String): Boolean =
+  name.matches(plainIdentifier) && !keywords.contains(name)
+
+/// [name] as a Pkl identifier, in backticks when needed.
+const function identifier(name: String): String = if (isPlainIdentifier(name)) name else "`\(name)`"
+
+/// [name] in PascalCase: `"tcp-data-split"` becomes `"TcpDataSplit"`, `"acceptedCAs"` becomes
+/// `"AcceptedCAs"`.
+const function pascal(name: String): String =
+  name
+    .split(Regex(#"[^A-Za-z0-9]+"#))
+    .filter((it) -> !it.isEmpty)
+    .map((it) -> it.capitalize())
+    .join("")
+
+/// [value] as a Pkl string literal.
+const function stringLiteral(value: String): String =
+  let (
+    escaped =
+      value
+        .replaceAll("\\", "\\\\")
+        .replaceAll("\"", "\\\"")
+        .replaceAll("\n", "\\n")
+        .replaceAll("\t", "\\t")
+  )
+    "\"\(escaped)\""
+
+/// [value] as a raw Pkl string literal (`#"..."#`), for regular expressions.
+const function rawStringLiteral(value: String): String =
+  let (pounds = rawDelimiter(value, "#"))
+    "\(pounds)\"\(value)\"\(pounds)"
+
+local const function rawDelimiter(value: String, pounds: String): String =
+  if (value.contains("\"\(pounds)") || value.contains("\\\(pounds)"))
+    rawDelimiter(value, pounds + "#")
+  else
+    pounds

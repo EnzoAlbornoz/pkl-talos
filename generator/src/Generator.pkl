@@ -1,0 +1,714 @@
+/// Turns the Talos machine configuration JSON schema into the files of a Pkl package.
+///
+/// Amend this module with the inputs, then read [files] and [digest].
+///
+/// Each schema definition becomes:
+/// - a module `<group>/<kind>.pkl` if it is a configuration document (listed in the schema's
+///   top-level `oneOf`), for example `network/LinkConfig.pkl`;
+/// - otherwise a class in the module of its group, for example `network.AddressConfig` in
+///   `network.pkl`. Only definitions that some document uses are generated.
+///
+/// Objects that the schema declares inline become classes next to the class that uses them, named
+/// after it and the property, for example `v1alpha1.MachineConfigCa`.
+module pkltalos.generator.Generator
+
+import "fixes.pkl"
+import "names.pkl"
+import "Planner.pkl"
+
+// ----------------------------------------------------------------------------------------------
+// Inputs
+
+/// Talos version of the schema, for example `"1.14.4"`; a leading `v` is ignored.
+talosVersion: String
+
+/// Where [schema] was read from; recorded in the generated package.
+schemaUrl: String
+
+/// The configuration schema, as nested maps and lists (see `json.pkl`).
+schema: Map<String, Any>
+
+/// Version of the generated package.
+packageVersion: String = "\(talosLine).0-dev"
+
+/// GitHub repository (`owner/name`) whose releases host the package.
+repository: String = "EnzoAlbornoz/pkl-talos"
+
+/// Hand-written modules to ship with the package, by their path in the package.
+supportFiles: Map<String, String> = Map()
+
+// ----------------------------------------------------------------------------------------------
+// Outputs
+
+/// Every file of the package, by path.
+fixed files: Map<String, String> =
+  generatedModules.toMap((it) -> it.path, (it) -> it.text)
+    + supportFiles
+    + Map("version.pkl", versionModule, "PklProject", pklProject)
+
+/// SHA-256 of every file except `PklProject`, whose only varying content is the package version.
+///
+/// Two packages with the same digest have the same modules.
+fixed digest: String =
+  "sha256:"
+    + files.keys
+      .toList()
+      .sort()
+      .filter((it) -> it != "PklProject")
+      .map((it) -> "\(it)\n\(files[it])\n")
+      .join("")
+      .sha256
+
+/// Upstream schema fixes that this schema needed.
+fixed appliedFixes: List<String> = fixes.applicable(rawDefs)
+
+/// The notes of the GitHub release that publishes this package, in Markdown.
+///
+/// They end with the state marker that the next release plan compares against.
+fixed releaseNotes: String =
+  let (
+    uri =
+      "package://github.com/\(repository)/releases/download/talos@\(packageVersion)/talos@\(packageVersion)"
+  )
+    """
+    Pkl modules for Talos Linux v\(talosLine) machine configuration documents and patches, generated from the configuration schema of [Talos v\(talos)](https://github.com/siderolabs/talos/releases/tag/v\(talos)).
+
+    Add the package to your `PklProject`:
+
+    ```pkl
+    dependencies {
+      ["talos"] { uri = "\(uri)" }
+    }
+    ```
+
+    Then amend `@talos/ConfigPatch.pkl` to write a configuration patch, or `@talos/MachineConfig.pkl` for a complete machine configuration. The [README](https://github.com/\(repository)#readme) explains how.
+
+    \(if (appliedFixes.isEmpty) "" else "Fixes applied to the upstream schema:\n\n" + appliedFixes.map((it) -> "- `\(it)`").join("\n") + "\n")
+    \(Planner.stateMarker(talos, digest))
+
+    """
+
+/// Talos version without the `v` prefix.
+fixed talos: String = talosVersion.replaceFirst(Regex("^v"), "")
+
+/// `major.minor` of [talos], for example `"1.14"`.
+fixed talosLine: String = talos.split(".").take(2).join(".")
+
+// ----------------------------------------------------------------------------------------------
+// Schema model
+
+local rawDefs: Map<String, Map> = schema.getOrNull("$defs") ?? schema["definitions"]
+
+local defs: Map<String, Map> = fixes.apply(rawDefs)
+
+local documentDefs: List<String> = schema["oneOf"].map((it) -> refName(it["$ref"]))
+
+local const function refName(ref: String): String =
+  ref.replaceFirst("#/$defs/", "").replaceFirst("#/definitions/", "")
+
+local const function groupOf(def: String): String = def.split(".").first
+
+local const function typeNameOf(def: String): String = def.split(".").drop(1).join(".")
+
+local const function propertiesOf(node: Map): Map<String, Map> =
+  node.getOrNull("properties") ?? Map()
+
+local const function requiredOf(node: Map): Set<String> =
+  (node.getOrNull("required") ?? List()).toSet()
+
+local const function docOf(node: Map): String? =
+  node.getOrNull("markdownDescription") ?? node.getOrNull("description")
+
+/// Keywords the generator understands. Anything else stops the generation, so that new schema
+/// features are noticed instead of being silently dropped.
+local knownKeywords: Set<String> =
+  Set(
+    "$ref",
+    "additionalProperties",
+    "description",
+    "enum",
+    "format",
+    "items",
+    "markdownDescription",
+    "maximum",
+    "maxItems",
+    "minimum",
+    "minItems",
+    "oneOf",
+    "pattern",
+    "patternProperties",
+    "properties",
+    "required",
+    "title",
+    "type",
+    "x-intellij-html-description",
+  )
+
+local knownTypes: Set<String> = Set("array", "boolean", "integer", "number", "object", "string")
+
+/// Problems with the schema that the generator cannot handle; generation fails if there are any.
+fixed unsupported: List<String> = defs.keys.toList().flatMap((def) -> unsupportedIn(defs[def], def))
+
+local function unsupportedIn(node: Map, path: String): List<String> =
+  node.keys
+    .toList()
+    .filter((it) -> !knownKeywords.contains(it))
+    .map((it) -> "\(path): unsupported keyword `\(it)`")
+    + (
+      if (node.containsKey("type") && !knownTypes.contains(node["type"]))
+        List("\(path): unsupported type `\(node["type"])`")
+      else
+        List()
+    )
+    + (
+      if (node.containsKey("$ref") && !defs.containsKey(refName(node["$ref"])))
+        List("\(path): unknown reference `\(node["$ref"])`")
+      else
+        List()
+    )
+    + (
+      if ((node.getOrNull("enum") ?? List()).any((it) -> !(it is String)))
+        List("\(path): non-string enum value")
+      else
+        List()
+    )
+    + (
+      if ((node.getOrNull("patternProperties") ?? Map()).length > 1)
+        List("\(path): more than one pattern property")
+      else
+        List()
+    )
+    + propertiesOf(node)
+      .keys
+      .toList()
+      .flatMap((it) -> unsupportedIn(propertiesOf(node)[it], "\(path).\(it)"))
+    + (if (node.getOrNull("items") is Map) unsupportedIn(node["items"], "\(path)[]") else List())
+    + (
+      if (node.getOrNull("additionalProperties") is Map)
+        unsupportedIn(node["additionalProperties"], "\(path){}")
+      else
+        List()
+    )
+    + (node.getOrNull("patternProperties") ?? Map()).values.flatMap((it) ->
+      unsupportedIn(it, "\(path){}")
+    )
+    + (node.getOrNull("oneOf") ?? List()).flatMap((it) -> unsupportedIn(it, "\(path)|"))
+
+/// Definitions referenced from [node], directly.
+local function refsIn(node: Any): Set<String> =
+  if (node is Map)
+    (if (node.getOrNull("$ref") is String) Set(refName(node["$ref"])) else Set())
+      + node.values.fold(Set(), (acc, it) -> acc + refsIn(it))
+  else if (node is List)
+    node.fold(Set(), (acc, it) -> acc + refsIn(it))
+  else
+    Set()
+
+/// Non-document definitions that some document uses, directly or not.
+local usedDefs: Set<String> =
+  reachable(documentDefs.fold(Set(), (acc, it) -> acc + refsIn(defs[it])), Set())
+
+local function reachable(pending: Set<String>, seen: Set<String>): Set<String> =
+  let (next = pending.filter((it) -> !seen.contains(it)))
+    if (next.isEmpty)
+      seen
+    else
+      reachable(next.fold(Set(), (acc, it) -> acc + refsIn(defs[it])), seen + next)
+
+// ----------------------------------------------------------------------------------------------
+// Modules
+
+local class Document {
+  def: String
+  group: String
+  /// Talos `kind`; the definition's type name for the legacy `v1alpha1` document.
+  kind: String
+  /// Talos `apiVersion`; `null` for the legacy `v1alpha1` document.
+  apiVersion: String?
+  moduleName: String
+  path: String = "\(group)/\(moduleName).pkl"
+  isLegacy: Boolean = apiVersion == null
+  /// Whether Talos tells documents of this kind apart by `name`.
+  isNamed: Boolean
+}
+
+local documents: List<Document> =
+  // Inside `new Document { ... }`, names resolve to the object's own properties first, so the
+  // lambda parameter must not be called `def`.
+  let (
+    base =
+      documentDefs.map((defName) ->
+        let (properties = propertiesOf(defs[defName]))
+          new Document {
+            def = defName
+            group = groupOf(defName)
+            kind = properties.getOrNull("kind")?.getOrNull("enum")?.first ?? typeNameOf(defName)
+            apiVersion = properties.getOrNull("apiVersion")?.getOrNull("enum")?.first
+            moduleName = kind
+            isNamed = properties.containsKey("name")
+          })
+  )
+    // Two documents with the same kind in a group (different API versions) get the API version
+    // in their module name.
+    base.map((it) ->
+      if (base.count((other) -> other.group == it.group && other.kind == it.kind) > 1)
+        (it) { moduleName = it.kind + names.pascal(it.apiVersion ?? "") }
+      else
+        it
+    )
+
+local groups: List<String> = usedDefs.toList().map((it) -> groupOf(it)).distinct.sort()
+
+/// A class to generate.
+local class ClassSpec {
+  name: String
+  node: Map
+}
+
+/// The classes of the types module of [group]: its used definitions and their inline objects.
+local function groupClasses(group: String): List<ClassSpec> =
+  usedDefs
+    .toList()
+    .filter((it) -> groupOf(it) == group && isClass(it))
+    .sort()
+    .flatMap((def) ->
+      List(new ClassSpec { name = typeNameOf(def); node = defs[def] })
+        + inlineClasses(typeNameOf(def), defs[def])
+    )
+
+/// Classes for the objects declared inline in the properties of [node], whose class is [owner]
+/// (`""` for a document module).
+local function inlineClasses(owner: String, node: Map): List<ClassSpec> =
+  propertiesOf(node)
+    .keys
+    .toList()
+    .flatMap((prop) -> inlineAt(owner + names.pascal(prop), propertiesOf(node)[prop]))
+
+local function inlineAt(className: String, schemaNode: Map): List<ClassSpec> =
+  if (schemaNode.containsKey("$ref"))
+    List()
+  else if (schemaNode.containsKey("properties"))
+    List(new ClassSpec { name = className; node = schemaNode })
+      + inlineClasses(className, schemaNode)
+  else if (schemaNode.getOrNull("items") is Map)
+    inlineAt(className, schemaNode["items"])
+  else if (mapValuesOf(schemaNode) != null)
+    inlineAt(className, mapValuesOf(schemaNode)!!)
+  else if (schemaNode.containsKey("oneOf"))
+    schemaNode["oneOf"].mapIndexed((i, it) -> inlineAt(alternativeName(className, i), it)).flatten()
+  else
+    List()
+
+local function alternativeName(name: String, index: Int): String =
+  if (index == 0) name else "\(name)\(index + 1)"
+
+/// The schema of the values of a map, if [node] describes a map.
+local function mapValuesOf(node: Map): Map? =
+  if (node.containsKey("properties"))
+    null
+  else if (node.getOrNull("patternProperties") is Map && !node["patternProperties"].isEmpty)
+    node["patternProperties"].values.first
+  else if (node.getOrNull("additionalProperties") is Map)
+    node["additionalProperties"]
+  else
+    null
+
+// ----------------------------------------------------------------------------------------------
+// Rendering
+
+/// What a generated module can refer to: support modules and the types modules of groups.
+local class Scope {
+  /// Group whose types module is being generated, or whose document module is.
+  group: String
+  /// Whether the module is the types module of [group].
+  isTypesModule: Boolean
+  /// Relative path from the module to the package root.
+  root: String = if (isTypesModule) "" else "../"
+  /// Names already used by the module's members, which imports must not reuse.
+  members: Set<String>
+  /// Groups whose types the module refers to.
+  referencedGroups: Set<String>
+  patch: String = alias("patch")
+  schema: String = alias("schema")
+  function alias(name: String): String = if (members.contains(name)) alias(name + "_") else name
+  function groupAlias(group: String): String = alias(group)
+  function ref(def: String): String =
+    if (isTypesModule && groupOf(def) == group)
+      typeNameOf(def)
+    else
+      "\(groupAlias(groupOf(def))).\(typeNameOf(def))"
+}
+
+/// A rendered property or class, with what it needs from the support modules.
+local class Rendered {
+  text: String
+  usesPatch: Boolean
+  usesSchema: Boolean
+}
+
+/// Whether definition [def] becomes a class; other definitions are written inline where they are
+/// used.
+local function isClass(def: String): Boolean = defs[def].containsKey("properties")
+
+/// Class definitions referenced from [node], looking through the definitions written inline.
+local function classRefsIn(node: Any): Set<String> =
+  refsIn(node)
+    .fold(Set(), (acc, it) -> if (isClass(it)) acc.add(it) else acc + classRefsIn(defs[it]))
+
+local function typeOf(node: Map, inlineName: String, scope: Scope): String =
+  if (node.containsKey("$ref"))
+    let (def = refName(node["$ref"]))
+      if (isClass(def)) scope.ref(def) else typeOf(defs[def], inlineName, scope)
+  else if (node.containsKey("enum"))
+    node["enum"].map((it) -> names.stringLiteral(it)).join(" | ")
+  else if (node.containsKey("oneOf"))
+    node["oneOf"]
+      .mapIndexed((i, it) -> typeOf(it, alternativeName(inlineName, i), scope))
+      .join(" | ")
+  else
+    let (type = node.getOrNull("type"))
+      if (type == "string")
+        stringType(node, scope)
+      else if (type == "integer")
+        intType(node)
+      else if (type == "number")
+        "Number"
+      else if (type == "boolean")
+        "Boolean"
+      else if (type == "array")
+        listType(node, inlineName, scope)
+      else if (type == "object")
+        objectType(node, inlineName, scope)
+      else
+        "Any"
+
+/// Talos validates durations with one of these patterns (they vary slightly between versions).
+local function isDurationPattern(pattern: String): Boolean = pattern.contains("([nuµm]?s|m|h)")
+
+local function stringType(node: Map, scope: Scope): String =
+  let (pattern = node.getOrNull("pattern"))
+    if (pattern == null)
+      "String"
+    else if (isDurationPattern(pattern))
+      "\(scope.schema).GoDuration"
+      // JSON schema patterns match anywhere in the string, like `contains`.
+    else
+      "String(contains(Regex(\(names.rawStringLiteral(pattern)))))"
+
+local function intType(node: Map): String =
+  let (min = node.getOrNull("minimum"))
+  let (max = node.getOrNull("maximum"))
+    if (min != null && max != null)
+      "Int(isBetween(\(min), \(max)))"
+    else if (min != null)
+      "Int(this >= \(min))"
+    else if (max != null)
+      "Int(this <= \(max))"
+    else
+      "Int"
+
+local function listType(node: Map, inlineName: String, scope: Scope): String =
+  let (
+    item = if (node.getOrNull("items") is Map) typeOf(node["items"], inlineName, scope) else "Any"
+  )
+  let (
+    constraints =
+      List(
+        if (node.containsKey("minItems")) "length >= \(node["minItems"])" else null,
+        if (node.containsKey("maxItems")) "length <= \(node["maxItems"])" else null,
+      ).filterNonNull()
+  )
+    "Listing<\(item)>" + (if (constraints.isEmpty) "" else "(\(constraints.join(", ")))")
+
+local function objectType(node: Map, inlineName: String, scope: Scope): String =
+  if (node.containsKey("properties"))
+    inlineName
+  else
+    let (values = mapValuesOf(node))
+      if (values != null)
+        "Mapping<String, \(patchable(values, typeOf(values, inlineName, scope), scope))>"
+      else
+        "\(scope.schema).Unstructured"
+
+/// Whether a value of [node]'s type has a default that amend syntax (`name { ... }`) can build on:
+/// objects, lists and maps.
+local function isAmendable(node: Map): Boolean =
+  if (node.containsKey("$ref"))
+    let (def = refName(node["$ref"])) isClass(def) || isAmendable(defs[def])
+  else
+    !node.containsKey("enum")
+      && !node.containsKey("oneOf")
+      && List("object", "array").contains(node.getOrNull("type"))
+
+/// [type], the type of [node], or a delete marker.
+///
+/// The union is written out rather than through `patch.Patchable`, so that type errors name the
+/// expected type.
+local function patchable(node: Map, type: String, scope: Scope): String =
+  "\(if (isAmendable(node)) "*" else "")\(type) | \(scope.patch).Delete"
+
+local function docComment(text: String?, indent: String): String =
+  if (text == null || text.trim().isEmpty)
+    ""
+  else
+    text
+      .replaceAll("\r\n", "\n")
+      .trim()
+      .split("\n")
+      .map((it) -> if (it.trimEnd().isEmpty) "\(indent)///" else "\(indent)/// \(it.trimEnd())")
+      .join("\n")
+      + "\n"
+
+/// Renders property [name] of a class or document.
+local function renderProperty(
+  name: String,
+  node: Map,
+  isRequired: Boolean,
+  inlineName: String,
+  scope: Scope,
+  indent: String,
+): Rendered =
+  let (type = typeOf(node, inlineName, scope))
+    new Rendered {
+      text =
+        docComment(docOf(node), indent)
+          + (if (isRequired) "\(indent)@\(scope.schema).Required\n" else "")
+          + "\(indent)\(names.identifier(name)): (\(patchable(node, type, scope)))?"
+      usesPatch = true
+      usesSchema = isRequired || type.contains("\(scope.schema).")
+    }
+
+local function renderDirective(scope: Scope, indent: String, isDocument: Boolean): Rendered = new {
+  text =
+    if (isDocument)
+      """
+      \(indent)/// Set to `"delete"` to delete this document from the machine configuration.
+      \(indent)///
+      \(indent)/// Talos finds the document by its `apiVersion`, `kind` and `name`, so set no other property.
+      \(indent)`$patch`: \(scope.patch).Directive?
+      """
+    else
+      """
+      \(indent)/// Set to `"delete"` to delete this object from the machine configuration.
+      \(indent)///
+      \(indent)/// In a list, Talos deletes the items whose first property has the same value, so set only the
+      \(indent)/// property to match on.
+      \(indent)`$patch`: \(scope.patch).Directive?
+      """
+  usesPatch = true
+  usesSchema = false
+}
+
+local function renderClass(spec: ClassSpec, scope: Scope): Rendered =
+  let (required = requiredOf(spec.node))
+  let (properties = propertiesOf(spec.node))
+  let (
+    rendered =
+      properties.keys
+        .toList()
+        .map((prop) ->
+          renderProperty(
+            prop,
+            properties[prop],
+            required.contains(prop),
+            spec.name + names.pascal(prop),
+            scope,
+            "  ",
+          )
+        ) + List(renderDirective(scope, "  ", false))
+  )
+    new Rendered {
+      text =
+        docComment(docOf(spec.node), "")
+          + "class \(spec.name) {\n"
+          + rendered.map((it) -> it.text).join("\n\n")
+          + "\n}"
+      usesPatch = true
+      usesSchema = rendered.any((it) -> it.usesSchema)
+    }
+
+local header: String =
+  "// Code generated by pkl-talos from the Talos v\(talos) machine configuration schema. DO NOT EDIT.\n\n"
+
+local function importsOf(scope: Scope, parts: List<Rendered>): String =
+  let (
+    imports =
+      (
+        scope.referencedGroups
+          .toList()
+          .map((it) -> Pair("\(scope.root)\(it).pkl", scope.groupAlias(it)))
+          + (
+            if (parts.any((it) -> it.usesPatch))
+              List(Pair("\(scope.root)patch.pkl", scope.patch))
+            else
+              List()
+          )
+          + (
+            if (parts.any((it) -> it.usesSchema))
+              List(Pair("\(scope.root)schema.pkl", scope.schema))
+            else
+              List()
+          )
+      ).sortBy((it) -> it.first)
+  )
+    imports
+      .map((it) ->
+        let (default = it.first.split("/").last.replaceLast(".pkl", ""))
+          if (default == it.second)
+            "import \"\(it.first)\""
+          else
+            "import \"\(it.first)\" as \(it.second)"
+      )
+      .join("\n")
+
+local class GeneratedModule {
+  path: String
+  text: String
+}
+
+local function groupModule(groupName: String): GeneratedModule =
+  let (classes = groupClasses(groupName))
+  let (
+    scope = new Scope {
+      group = groupName
+      isTypesModule = true
+      members = classes.map((it) -> it.name).toSet()
+      referencedGroups =
+        classes
+          .fold(Set(), (acc, it) -> acc + classRefsIn(it.node))
+          .map((it) -> groupOf(it))
+          .filter((it) -> it != groupName)
+    }
+  )
+  let (rendered = classes.map((it) -> renderClass(it, scope)))
+    new GeneratedModule {
+      path = "\(groupName).pkl"
+      text =
+        header
+          + "/// Types of the Talos `\(groupName)` configuration documents.\n"
+          + "module talos.\(groupName)\n\n"
+          + importsBlock(scope, rendered)
+          + rendered.map((it) -> it.text).join("\n\n")
+          + "\n"
+    }
+
+/// The import statements of a module followed by a blank line, or nothing if it imports nothing.
+local function importsBlock(scope: Scope, parts: List<Rendered>): String =
+  let (imports = importsOf(scope, parts)) if (imports.isEmpty) "" else imports + "\n\n"
+
+local function documentModule(doc: Document): GeneratedModule =
+  let (node = defs[doc.def])
+  let (classes = inlineClasses("", node))
+  let (
+    scope = new Scope {
+      group = doc.group
+      isTypesModule = false
+      // `output` is a member of every module.
+      members =
+        (propertiesOf(node).keys.toList() + classes.map((it) -> it.name) + List("output")).toSet()
+      referencedGroups = classRefsIn(node).map((it) -> groupOf(it))
+    }
+  )
+  let (parts = documentProperties(doc, node, scope) + classes.map((it) -> renderClass(it, scope)))
+    new GeneratedModule {
+      path = doc.path
+      text =
+        header
+          + docComment(docOf(node), "")
+          + "open module talos.\(doc.group).\(doc.moduleName)\n\n"
+          + "extends \"../Document.pkl\"\n\n"
+          + importsBlock(scope, parts)
+          + (identityProperties(doc, node, scope) + parts.map((it) -> it.text)).join("\n\n")
+          + "\n"
+    }
+
+/// The properties that identify a document: `apiVersion`, `kind` and `name`, or the `version` of
+/// the legacy `v1alpha1` document.
+local function identityProperties(doc: Document, node: Map, scope: Scope): List<String> =
+  (
+    if (doc.isLegacy)
+      List(
+        "/// Version of the configuration document format.\n"
+          + "fixed version: String = \(names.stringLiteral(propertiesOf(node)["version"]["enum"].first))",
+      )
+    else
+      List(
+        "fixed apiVersion: String = \(names.stringLiteral(doc.apiVersion!!))",
+        "fixed kind: String = \(names.stringLiteral(doc.kind))",
+      )
+  )
+    + (
+      // Talos needs the name to tell documents apart, so even a patch sets it.
+      if (doc.isNamed)
+        List(
+          docComment(docOf(propertiesOf(node)["name"]), "")
+            + "name: \(typeOf(propertiesOf(node)["name"], "Name", scope))",
+        )
+      else
+        List()
+    )
+
+/// The configuration properties of a document, then its `$patch` directive.
+local function documentProperties(doc: Document, node: Map, scope: Scope): List<Rendered> =
+  let (properties = propertiesOf(node))
+  let (required = requiredOf(node))
+    properties.keys
+      .toList()
+      .filter((it) ->
+        !Set("apiVersion", "kind").contains(it)
+          && !(doc.isNamed && it == "name")
+          && !(doc.isLegacy && it == "version")
+      )
+      .map((it) ->
+        renderProperty(it, properties[it], required.contains(it), names.pascal(it), scope, "")
+      )
+      + (if (doc.isLegacy) List() else List(renderDirective(scope, "", true)))
+
+local generatedModules: List<GeneratedModule> =
+  if (!unsupported.isEmpty)
+    throw("The schema has constructs the generator does not support:\n" + unsupported.join("\n"))
+  else
+    groups.map((it) -> groupModule(it)) + documents.map((it) -> documentModule(it))
+
+// ----------------------------------------------------------------------------------------------
+// Package files
+
+/// Documents of the package as `Pair(path, kind)`, sorted by path.
+fixed documentModules: List<Pair<String, String>> =
+  documents
+    .map((it) -> Pair(it.path, it.kind))
+    .sortBy((it) -> it.first)
+
+local versionModule: String =
+  header
+    + """
+    /// The Talos release that this package was generated from.
+    module talos.version
+
+    /// Talos version, without the `v` prefix.
+    fixed talos: String = \(names.stringLiteral(talos))
+
+    /// The machine configuration schema that this package was generated from.
+    fixed schemaUrl: String = \(names.stringLiteral(schemaUrl))
+
+    """
+
+local pklProject: String =
+  let (base = "https://github.com/\(repository)")
+    """
+    // Code generated by pkl-talos. DO NOT EDIT.
+
+    amends "pkl:Project"
+
+    package {
+      name = "talos"
+      version = \(names.stringLiteral(packageVersion))
+      baseUri = "package://github.com/\(repository)/releases/download/talos@\\(version)/talos"
+      packageZipUrl = "\(base)/releases/download/talos@\\(version)/talos@\\(version).zip"
+      license = "MPL-2.0"
+      sourceCode = \(names.stringLiteral(base))
+      issueTracker = \(names.stringLiteral(base + "/issues"))
+      description = \(names.stringLiteral("Typed Talos Linux v\(talosLine) machine configuration documents and patches, generated from the Talos v\(talos) configuration schema."))
+    }
+
+    """

@@ -1,0 +1,17 @@
+/// Reads JSON as plain data: maps, lists, strings, numbers, booleans and `null`.
+module pkltalos.generator.json
+
+import "pkl:json"
+
+local parser: json.Parser = new { useMapping = true }
+
+/// Parses JSON [text] into nested maps and lists.
+function parse(text: String): Any = toData(parser.parse(text))
+
+local function toData(value: Any): Any =
+  if (value is Mapping)
+    value.toMap().mapValues((_, it) -> toData(it))
+  else if (value is Listing)
+    value.toList().map((it) -> toData(it))
+  else
+    value

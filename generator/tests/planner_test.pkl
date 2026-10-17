@@ -1,0 +1,113 @@
+amends "pkl:test"
+
+import "../src/Planner.pkl"
+
+local talos: List<Map> =
+  List(
+    Map("tag_name", "v1.15.0-alpha.1", "prerelease", true),
+    Map("tag_name", "v1.14.4", "prerelease", false),
+    Map("tag_name", "v1.14.3", "prerelease", false),
+    Map("tag_name", "v1.13.11", "prerelease", false),
+    Map("tag_name", "v1.13.12", "draft", true),
+    Map("tag_name", "v1.7.9", "prerelease", false),
+    Map("tag_name", "not-a-version", "prerelease", false),
+  )
+
+local function release(version: String, talosVersion: String, digest: String): Map =
+  Map(
+    "tag_name", "talos@\(version)",
+    "body", "Notes.\n\n\(Planner.stateMarker(talosVersion, digest))\n",
+  )
+
+/// Package digests that only depend on the Talos version, as if the generator did not change.
+local function digests(version: String): String = "sha256:\(version)"
+
+local planner: Planner = (Planner) {
+  talosReleases = talos
+  publishedReleases = List()
+  digestOf = (it) -> digests(it)
+}
+
+local function planned(p: Planner): List<String> =
+  p.releases.map((it) -> "\(it.version) <- \(it.talos) (latest=\(it.latest)): \(it.reason)")
+
+facts {
+  ["the targets are the newest stable release of every line since Talos 1.8"] {
+    planner.targets == List("1.13.11", "1.14.4")
+  }
+
+  ["the first plan publishes every stable line since Talos 1.8"] {
+    planned(planner)
+      == List(
+        "1.13.0 <- 1.13.11 (latest=false): first package of the Talos 1.13 line",
+        "1.14.0 <- 1.14.4 (latest=true): first package of the Talos 1.14 line",
+      )
+  }
+
+  ["nothing is published when the packages are up to date"] {
+    planned((planner) {
+      publishedReleases =
+        List(
+          release("1.13.0", "1.13.11", "sha256:1.13.11"),
+          release("1.14.2", "1.14.4", "sha256:1.14.4"),
+        )
+    }).isEmpty
+  }
+
+  ["a new Talos release publishes the next patch version of its line"] {
+    planned((planner) {
+      publishedReleases =
+        List(
+          release("1.13.0", "1.13.11", "sha256:1.13.11"),
+          release("1.14.2", "1.14.3", "sha256:1.14.3"),
+        )
+    })
+      == List("1.14.3 <- 1.14.4 (latest=true): Talos 1.14.4 was released")
+  }
+
+  ["a generator change publishes every line again"] {
+    planned((planner) {
+      publishedReleases =
+        List(release("1.13.0", "1.13.11", "sha256:old"), release("1.14.2", "1.14.4", "sha256:old"))
+    })
+      == List(
+        "1.13.1 <- 1.13.11 (latest=false): the generator changed",
+        "1.14.3 <- 1.14.4 (latest=true): the generator changed",
+      )
+  }
+
+  ["an older line is not shown as the latest release"] {
+    planned((planner) {
+      publishedReleases =
+        List(
+          release("1.13.0", "1.13.11", "sha256:old"),
+          release("1.14.2", "1.14.4", "sha256:1.14.4"),
+        )
+    })
+      == List("1.13.1 <- 1.13.11 (latest=false): the generator changed")
+  }
+
+  ["lines can be selected"] {
+    planned((planner) { lines = List("1.13") })
+      == List("1.13.0 <- 1.13.11 (latest=true): first package of the Talos 1.13 line")
+  }
+
+  ["pre-release lines are opt-in"] {
+    planned((planner) { includePrereleases = true; lines = List("1.15") })
+      == List("1.15.0-pre.0 <- 1.15.0-alpha.1 (latest=false): first package of the Talos 1.15 line")
+    planned((planner) {
+      includePrereleases = true
+      lines = List("1.15")
+      publishedReleases = List(release("1.15.0-pre.0", "1.15.0-alpha.0", "sha256:1.15.0-alpha.0"))
+    })
+      == List("1.15.0-pre.1 <- 1.15.0-alpha.1 (latest=false): Talos 1.15.0-alpha.1 was released")
+  }
+
+  ["releases without a state marker are republished"] {
+    planned((planner) {
+      publishedReleases = List(Map("tag_name", "talos@1.14.0", "body", "hand-written notes"))
+      lines = List("1.14")
+    })
+      == List("1.14.1 <- 1.14.4 (latest=true): Talos 1.14.4 was released")
+  }
+}

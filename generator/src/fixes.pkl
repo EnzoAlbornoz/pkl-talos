@@ -1,0 +1,78 @@
+/// Corrections for known errors in the upstream Talos configuration schema.
+///
+/// A fix only applies while the upstream schema still has the error, so it turns into a no-op once
+/// Talos corrects its schema.
+module pkltalos.generator.fixes
+
+/// Keys that describe a property rather than the type of its value.
+local const annotationKeys: Set<String> =
+  Set(
+    "title",
+    "description",
+    "markdownDescription",
+    "x-intellij-html-description",
+  )
+
+/// `(definition, property)` pairs that the schema declares as a single object, although Talos
+/// decodes a list of them: the Go fields are `[]*x509.PEMEncodedCertificate`.
+const objectsThatAreLists: List<Pair<String, String>> =
+  List(
+    Pair("v1alpha1.MachineConfig", "acceptedCAs"),
+    Pair("v1alpha1.ClusterConfig", "acceptedCAs"),
+  )
+
+/// Definitions that the schema declares as objects without properties, although their Go types
+/// marshal to a string, with the schema to use instead.
+const objectsThatAreStrings: Map<String, Map> =
+  Map(
+    // `Endpoint` embeds a `*url.URL` and marshals as `udp://127.0.0.1:12345`.
+    "v1alpha1.Endpoint", Map("type", "string", "format", "uri"),
+  )
+
+/// A description of each fix that applies to [defs].
+function applicable(defs: Map<String, Map>): List<String> =
+  objectsThatAreLists
+    .filter((it) -> isObject(propertyOf(defs, it)))
+    .map((it) -> "\(it.first).\(it.second): object -> list")
+    + objectsThatAreStrings.keys
+      .toList()
+      .filter((it) -> isEmptyObject(defs.getOrNull(it)))
+      .map((it) -> "\(it): object -> string")
+
+/// [defs] with every applicable fix applied.
+function apply(defs: Map<String, Map>): Map<String, Map> =
+  let (
+    withLists =
+      objectsThatAreLists.fold(defs, (acc, it) ->
+        let (node = propertyOf(acc, it))
+          if (isObject(node)) withProperty(acc, it, objectToList(node!!)) else acc
+      )
+  )
+    objectsThatAreStrings.fold(withLists, (acc, name, schema) ->
+      if (isEmptyObject(acc.getOrNull(name)))
+        acc.put(name, annotationsOf(acc[name]) + schema)
+      else
+        acc
+    )
+
+local function propertyOf(defs: Map<String, Map>, path: Pair<String, String>): Map? =
+  defs.getOrNull(path.first)?.getOrNull("properties")?.getOrNull(path.second)
+
+local function isObject(node: Map?): Boolean = node?.getOrNull("type") == "object"
+
+local function isEmptyObject(node: Map?): Boolean =
+  isObject(node) && (node!!.getOrNull("properties") ?? Map()).isEmpty
+
+local function annotationsOf(node: Map): Map = node.filter((k, _) -> annotationKeys.contains(k))
+
+local function objectToList(node: Map): Map =
+  annotationsOf(node)
+    + Map("type", "array", "items", node.filter((k, _) -> !annotationKeys.contains(k)))
+
+local function withProperty(
+  defs: Map<String, Map>,
+  path: Pair<String, String>,
+  node: Map,
+): Map<String, Map> =
+  let (def = defs[path.first])
+    defs.put(path.first, def.put("properties", def["properties"].put(path.second, node)))

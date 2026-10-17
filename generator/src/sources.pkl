@@ -1,0 +1,15 @@
+/// Where the generator reads its inputs from.
+module pkltalos.generator.sources
+
+/// URL of the machine configuration schema of Talos release [version] (`1.14.4` or `v1.14.4`).
+function urlOf(version: String): String =
+  let (tag = if (version.startsWith("v")) version else "v\(version)")
+    "https://raw.githubusercontent.com/siderolabs/talos/\(tag)/pkg/machinery/config/schemas/config.schema.json"
+
+/// The hand-written modules in the repository's `package/` directory, by their path in the package.
+supportFiles: Map<String, String> =
+  let (resources = read*("../../package/**.pkl"))
+    resources.keys
+      .toList()
+      .sort()
+      .toMap((it) -> it.replaceFirst("../../package/", ""), (it) -> resources[it].text)

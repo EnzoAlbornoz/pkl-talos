@@ -1,0 +1,48 @@
+/// A complete Talos machine configuration: every document that a machine runs with.
+///
+/// ```
+/// amends "@talos/MachineConfig.pkl"
+///
+/// import "@talos/network/HostnameConfig.pkl"
+/// import "@talos/v1alpha1/Config.pkl"
+///
+/// documents {
+///   new Config {
+///     machine {
+///       type = "worker"
+///       token = read("env:MACHINE_TOKEN").text
+///       // ...
+///     }
+///   }
+///   new HostnameConfig {
+///     hostname = "worker-1"
+///   }
+/// }
+/// ```
+///
+/// `pkl eval config.pkl` renders the documents as a multi-document YAML stream, for
+/// `talosctl apply-config --file` or `talosctl validate --config`.
+///
+/// Before rendering, this module checks that the documents set every property that Talos requires
+/// (marked `@schema.Required`), delete nothing, and appear once each. It fails with a list of the
+/// problems it finds. Talos checks the rest when it loads the configuration; run
+/// `talosctl validate --config <file> --mode <mode>` to check it ahead of time.
+open module talos.MachineConfig
+
+import "Document.pkl"
+import "internal/validation.pkl"
+import "schema.pkl"
+
+/// The documents of the machine configuration.
+///
+/// A [Dynamic] document is rendered as it is, without checks. Use one for settings that the typed
+/// documents do not describe.
+documents: Listing<Document | *Dynamic>
+
+output {
+  value = validation.checked(documents, validation.configRules)
+  renderer = new YamlRenderer {
+    isStream = true
+    converters = schema.converters
+  }
+}

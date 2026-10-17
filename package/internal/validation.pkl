@@ -1,0 +1,237 @@
+/// Checks that `ConfigPatch.pkl` and `MachineConfig.pkl` run before rendering their documents.
+module talos.internal.validation
+
+import "pkl:reflect"
+
+import "../patch.pkl"
+import "../schema.pkl"
+import "../version.pkl"
+
+/// Whether the Talos version of this package deletes list items. Up to Talos 1.11, a list item marked
+/// with `$patch: delete` fails with `lookup failed`.
+local canDeleteListItems: Boolean =
+  let (parts = version.talos.split(".").take(2).map((it) -> it.toInt()))
+    parts[0] > 1 || parts[1] >= 12
+
+/// What to check.
+class Rules {
+  /// What the documents form, for error messages.
+  subject: String
+
+  /// Whether the documents form a complete machine configuration rather than a patch.
+  ///
+  /// A complete configuration sets every property marked [schema.Required] and deletes nothing.
+  complete: Boolean
+}
+
+/// Rules for a machine configuration patch.
+patchRules: Rules = new {
+  subject = "machine configuration patch"
+  complete = false
+}
+
+/// Rules for a complete machine configuration.
+configRules: Rules = new {
+  subject = "machine configuration"
+  complete = true
+}
+
+/// [documents], if they follow [rules]; otherwise an error that lists every problem.
+function checked(documents: Listing, rules: Rules): Listing =
+  let (docs = documents.toList())
+  let (
+    problems =
+      docs.mapIndexed((i, it) -> documentProblems(it, i, rules)).flatten()
+        + duplicateProblems(docs, rules)
+  )
+    if (problems.isEmpty)
+      documents
+    else
+      throw("Invalid \(rules.subject):\n" + problems.map((it) -> "- \(it)").join("\n"))
+
+/// Where an object is: a document, a list item, inside a list item, or anywhere else.
+local typealias Position = "document" | "item" | "insideItem" | "field"
+
+/// The problems of [document]; none for a [Dynamic] document, which is rendered as it is.
+local function documentProblems(document: Any, index: Int, rules: Rules): List<String> =
+  if (document is Typed)
+    objectProblems(document, "documents[\(index)] (\(describe(document)))", rules, "document")
+  else
+    List()
+
+/// The kind and name of [document], for error messages.
+local function describe(document: Typed): String =
+  let (kind = document.getPropertyOrNull("kind"))
+  let (name = document.getPropertyOrNull("name"))
+    if (kind == null)
+      "v1alpha1 config"
+    else if (name == null)
+      kind
+    else
+      "\(kind) \"\(name)\""
+
+/// How Talos identifies [document] when merging.
+local function identityOf(document: Typed): String =
+  let (kind = document.getPropertyOrNull("kind"))
+    if (kind == null)
+      "v1alpha1"
+    else
+      List(document.getPropertyOrNull("apiVersion"), kind, document.getPropertyOrNull("name"))
+        .filterNonNull()
+        .join("/")
+
+local function duplicateProblems(documents: List, rules: Rules): List<String> =
+  if (!rules.complete)
+    List()
+  else
+    let (
+      ids =
+        documents
+          .filter((it) -> it is Typed)
+          .map((it) -> identityOf(it))
+    )
+      ids.distinct
+        .filter((id) -> ids.count((it) -> it == id) > 1)
+        .map((id) -> "more than one `\(id)` document")
+
+/// Properties that identify a document rather than configure it.
+local identityProperties: Set<String> = Set("apiVersion", "kind", "name", "version")
+
+local function objectProblems(
+  object: Typed,
+  path: String,
+  rules: Rules,
+  position: Position,
+): List<String> =
+  let (properties = object.toMap())
+  let (directive = properties.getOrNull("$patch"))
+    if (directive != null)
+      directiveProblems(properties, path, rules, position)
+    else
+      requiredProblems(object, properties, path, rules)
+        + childProblems(properties, path, rules, position)
+
+local function directiveProblems(
+  properties: Map,
+  path: String,
+  rules: Rules,
+  position: Position,
+): List<String> =
+  let (keys = properties.filter((k, v) -> v != null && k != "$patch").keys.toList())
+    if (rules.complete)
+      List("\(path): a complete machine configuration cannot use `$patch`")
+    else if (position == "insideItem")
+      List("\(path): Talos cannot delete a key inside a list item")
+    else if (position == "item")
+      if (!canDeleteListItems)
+        List(
+          "\(path): Talos \(version.talos) cannot delete list items (Talos 1.12 and later can); delete the whole list with `patch.deleted` in one patch and set it again in a later one",
+        )
+      else if (keys.length != 1)
+        List(
+          "\(path): a list item to delete must set exactly one property, which Talos matches items on, but it sets \(quoted(keys))",
+        )
+      else if (!isScalar(properties[keys.first]))
+        List(
+          "\(path): Talos matches the list item to delete on `\(keys.first)`, so it must be a string, number or boolean",
+        )
+      else
+        List()
+    else
+      let (
+        extra = keys.filter((it) -> !(position == "document" && identityProperties.contains(it)))
+      )
+        if (extra.isEmpty)
+          List()
+        else
+          List(
+            "\(path): Talos deletes the whole \(if (position == "document") "document" else "object") marked with `$patch`, so it ignores \(quoted(extra))",
+          )
+
+local function requiredProblems(
+  object: Typed,
+  properties: Map,
+  path: String,
+  rules: Rules,
+): List<String> =
+  if (!rules.complete)
+    List()
+  else
+    requiredProperties(object)
+      .filter((it) -> properties.getOrNull(it) == null)
+      .map((it) -> "\(path).\(it): Talos requires this property")
+
+local function requiredProperties(object: Typed): List<String> =
+  classes(reflect.Class(object.getClass()))
+    .flatMap((it) -> it.properties.values)
+    .filter((it) -> it.annotations.any((a) -> a is schema.Required))
+    .map((it) -> it.name)
+
+local function classes(clazz: reflect.Class?): List<reflect.Class> =
+  if (clazz == null) List() else List(clazz) + classes(clazz.superclass)
+
+local function childProblems(
+  properties: Map,
+  path: String,
+  rules: Rules,
+  position: Position,
+): List<String> =
+  let (inner = if (position == "item" || position == "insideItem") "insideItem" else "field")
+    properties.keys
+      .toList()
+      .flatMap((it) -> valueProblems(properties[it], "\(path).\(it)", rules, inner))
+
+/// The problems of [value]. Objects of other packages and free-form values have none: they are
+/// rendered as they are.
+local function valueProblems(
+  value: Any,
+  path: String,
+  rules: Rules,
+  position: Position,
+): List<String> =
+  if (value == null)
+    List()
+  else if (value is patch.Delete)
+    if (rules.complete)
+      List("\(path): a complete machine configuration cannot delete anything")
+    else if (position == "insideItem")
+      List("\(path): Talos cannot delete a key inside a list item")
+    else
+      List()
+  else if (value is Listing)
+    itemProblems(value.toList(), path, rules, position)
+  else if (value is List)
+    itemProblems(value, path, rules, position)
+  else if (value is Mapping)
+    entryProblems(value.toMap(), path, rules, position)
+  else if (value is Map)
+    entryProblems(value, path, rules, position)
+  else if (value is Typed && value.hasProperty("$patch"))
+    objectProblems(value, path, rules, position)
+  else
+    List()
+
+local function itemProblems(
+  items: List,
+  path: String,
+  rules: Rules,
+  position: Position,
+): List<String> =
+  let (item = if (position == "insideItem") "insideItem" else "item")
+    items.mapIndexed((i, it) -> valueProblems(it, "\(path)[\(i)]", rules, item)).flatten()
+
+local function entryProblems(
+  entries: Map,
+  path: String,
+  rules: Rules,
+  position: Position,
+): List<String> =
+  entries.keys
+    .toList()
+    .flatMap((it) -> valueProblems(entries[it], "\(path)[\"\(it)\"]", rules, position))
+
+local function isScalar(value: Any): Boolean =
+  value is String || value is Int || value is Float || value is Boolean
+
+local function quoted(names: List<String>): String =
+  if (names.isEmpty) "none" else names.map((it) -> "`\(it)`").join(", ")

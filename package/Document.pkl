@@ -1,0 +1,20 @@
+/// Base module of every Talos machine configuration document.
+///
+/// Amend a document module to describe a single document:
+///
+/// ```
+/// amends "@talos/network/HostnameConfig.pkl"
+///
+/// hostname = "worker-1"
+/// ```
+///
+/// To render several documents together, list them in `ConfigPatch.pkl` or `MachineConfig.pkl`.
+abstract module talos.Document
+
+import "schema.pkl"
+
+output {
+  renderer = new YamlRenderer {
+    converters = schema.converters
+  }
+}

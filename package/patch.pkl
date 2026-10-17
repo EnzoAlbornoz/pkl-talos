@@ -1,0 +1,38 @@
+/// Talos strategic merge patch directives.
+///
+/// Talos deletes from the machine configuration whatever a patch marks with `$patch: delete`:
+///
+/// | To delete | Write | Renders as |
+/// | --- | --- | --- |
+/// | a field, a map entry or a whole list | `mtu = patch.deleted` | `mtu: {$patch: delete}` |
+/// | a list item | ``new { address = "10.0.0.3/24"; `$patch` = "delete" }`` | `- {address: 10.0.0.3/24, $patch: delete}` |
+/// | a document | ``new LinkConfig { name = "eth0"; `$patch` = "delete" }`` | the document's `apiVersion`, `kind`, `name` and `$patch: delete` |
+///
+/// Talos rules that `ConfigPatch.pkl` checks before rendering:
+/// - Talos matches a list item on its first property other than `$patch`, so a list item to delete
+///   sets exactly one property.
+/// - Talos cannot delete a key inside a list item.
+/// - An object or document marked with `$patch: delete` is deleted as a whole, so it sets no other
+///   property, apart from the `apiVersion`, `kind` and `name` that identify a document.
+/// - The legacy `v1alpha1` document cannot be deleted as a whole, so it has no `$patch` property.
+module talos.patch
+
+/// The value of a `$patch` directive. Talos supports `delete` only.
+typealias Directive = "delete"
+
+/// A value that deletes the field or map entry it is assigned to.
+///
+/// Use [deleted] rather than creating instances.
+class Delete {
+  fixed `$patch`: Directive = "delete"
+}
+
+/// Deletes the field, map entry or list it is assigned to, as in `mtu = patch.deleted`.
+fixed deleted: Delete = new {}
+
+/// A value of type [T], or [deleted].
+///
+/// Every property of a generated document or class accepts [Delete], so that a patch can delete it.
+/// The generated modules spell the union out, as in `mtu: (Int | patch.Delete)?`, so that type
+/// errors name the expected type. Use this alias for the same purpose in your own modules.
+typealias Patchable<T> = *T | Delete

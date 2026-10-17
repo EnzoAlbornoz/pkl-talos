@@ -1,0 +1,46 @@
+/// Generates the pkl-talos package for one Talos release.
+///
+/// ```
+/// pkl eval -m build/talos generator/generate.pkl -p talosVersion=1.14.4 [-p packageVersion=1.14.0]
+/// ```
+///
+/// External properties (`-p name=value`):
+/// - `talosVersion`: Talos release, such as `1.14.4`; defaults to the `TALOS_VERSION` environment
+///   variable.
+/// - `schema`: URI of the schema to read instead of the one published with that release, for example
+///   `file:///tmp/config.schema.json`.
+/// - `packageVersion`: version of the generated package; defaults to `<major>.<minor>.0-dev`.
+/// - `repository`: GitHub repository (`owner/name`) that publishes the package; defaults to the
+///   `GITHUB_REPOSITORY` environment variable, then `EnzoAlbornoz/pkl-talos`.
+///
+/// Evaluate `-x digest` for the content digest that the release workflow compares, or
+/// `-x appliedFixes` for the upstream schema fixes that the release needed.
+amends "src/Generator.pkl"
+
+import "src/json.pkl"
+import "src/sources.pkl"
+
+talosVersion =
+  read?("prop:talosVersion")
+    ?? read?("env:TALOS_VERSION")
+    ?? throw("Set the Talos version with -p talosVersion=<version>.")
+
+schemaUrl = read?("prop:schema") ?? sources.urlOf(talosVersion)
+
+schema = json.parse(read(schemaUrl).text) as Map
+
+packageVersion = read?("prop:packageVersion") ?? super.packageVersion
+
+repository = read?("prop:repository") ?? read?("env:GITHUB_REPOSITORY") ?? super.repository
+
+supportFiles = sources.supportFiles
+
+output {
+  files {
+    for (path, content in module.files) {
+      [path] {
+        text = content
+      }
+    }
+  }
+}
