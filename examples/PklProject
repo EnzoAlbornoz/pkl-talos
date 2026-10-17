@@ -1,0 +1,16 @@
+/// The examples, which run against the package that `mise run generate` writes to `build/talos`.
+///
+/// In your own project, depend on a published package instead:
+///
+/// ```
+/// dependencies {
+///   ["talos"] {
+///     uri = "package://github.com/EnzoAlbornoz/pkl-talos/releases/download/talos@1.14.0/talos@1.14.0"
+///   }
+/// }
+/// ```
+amends "pkl:Project"
+
+dependencies {
+  ["talos"] = import("../build/talos/PklProject")
+}

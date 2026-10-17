@@ -1,0 +1,64 @@
+/// One patch per node, written to its own file.
+///
+/// ```
+/// pkl eval -m out examples/patches/nodes.pkl
+/// talosctl machineconfig patch controlplane.yaml --patch @out/cp-1.yaml -o cp-1.yaml
+/// ```
+module nodes
+
+import "@talos/ConfigPatch.pkl"
+import "@talos/network/BondConfig.pkl"
+import "@talos/network/HostnameConfig.pkl"
+import "@talos/patch.pkl"
+
+local class Node {
+  hostname: String
+
+  /// Address of the node on its bond, with the prefix length.
+  address: String
+
+  /// The interfaces that form the node's bond.
+  links: Listing<String> = new { "enp1s0"; "enp2s0" }
+}
+
+local nodes: Listing<Node> = new {
+  new { hostname = "cp-1"; address = "10.0.0.11/24" }
+  new { hostname = "cp-2"; address = "10.0.0.12/24" }
+  new {
+    hostname = "cp-3"
+    address = "10.0.0.13/24"
+    // Adds a third interface to the default two.
+    links { "enp3s0" }
+  }
+}
+
+/// The patch of [node].
+local function patchOf(node: Node): ConfigPatch = (ConfigPatch) {
+  documents {
+    new HostnameConfig {
+      auto = patch.deleted
+      hostname = node.hostname
+    }
+    new BondConfig {
+      name = "bond0"
+      links = node.links
+      bondMode = "802.3ad"
+      lacpRate = "fast"
+      addresses {
+        new { address = node.address }
+      }
+      // Without a destination, the default route.
+      routes {
+        new { gateway = "10.0.0.1" }
+      }
+    }
+  }
+}
+
+output {
+  files {
+    for (node in nodes) {
+      ["\(node.hostname).yaml"] = patchOf(node).output
+    }
+  }
+}

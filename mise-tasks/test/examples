@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+#MISE description="Render the examples and validate the results with the matching talosctl"
+#MISE wait_for=["generate"]
+set -euo pipefail
+
+source "$(dirname "$0")/../../scripts/lib.sh"
+
+talos="$(package_talos_version)"
+line="$(minor_of "$talos")"
+
+# The examples use the documents of Talos 1.14.
+if ! version_le 1.14 "$line"; then
+  echo "Skipping the examples, which need Talos 1.14 or later (the package is for Talos $talos)."
+  exit 0
+fi
+
+talosctl() { mise exec "talosctl@$talos" -- talosctl "$@"; }
+
+out="$PWD/build/examples"
+rm -rf "$out"
+mkdir -p "$out/nodes"
+
+cd examples
+pkl project resolve >/dev/null
+
+echo "--- complete/controlplane.pkl"
+talosctl gen secrets --output-file "$out/secrets.yaml" >/dev/null
+pkl eval complete/controlplane.pkl -p "secrets=$(file_uri "$out/secrets.yaml")" -o "$out/controlplane.yaml"
+talosctl validate --config "$out/controlplane.yaml" --mode metal
+
+echo "--- patches/controlplane.pkl"
+pkl eval patches/controlplane.pkl -o "$out/controlplane-patch.yaml"
+talosctl gen config garden https://k8s.example.com:6443 --with-secrets "$out/secrets.yaml" \
+  --output-types controlplane --config-patch-control-plane "@$out/controlplane-patch.yaml" \
+  --with-docs=false --with-examples=false --output "$out/generated.yaml" >/dev/null
+talosctl validate --config "$out/generated.yaml" --mode metal
+
+echo "--- patches/nodes.pkl"
+pkl eval -m "$out/nodes" patches/nodes.pkl >/dev/null
+for patch in "$out"/nodes/*.yaml; do
+  talosctl machineconfig patch "$out/generated.yaml" --patch "@$patch" -o "$out/node.yaml"
+  talosctl validate --config "$out/node.yaml" --mode metal
+done

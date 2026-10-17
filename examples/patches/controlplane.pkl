@@ -1,0 +1,58 @@
+/// A patch for every control plane node of a cluster.
+///
+/// ```
+/// pkl eval examples/patches/controlplane.pkl -o controlplane-patch.yaml
+/// talosctl gen config garden https://k8s.example.com:6443 --config-patch-control-plane @controlplane-patch.yaml
+/// ```
+amends "@talos/ConfigPatch.pkl"
+
+import "@talos/cluster/DiscoveryServiceConfig.pkl"
+import "@talos/k8s/KubeletConfig.pkl"
+import "@talos/k8s/KubeNodeConfig.pkl"
+import "@talos/network/Layer2VIPConfig.pkl"
+import "@talos/network/TimeSyncConfig.pkl"
+import "@talos/patch.pkl"
+import "@talos/runtime/UnattendedInstallConfig.pkl"
+import "@talos/v1alpha1/Config.pkl"
+
+documents {
+  new Config {
+    machine {
+      certSANs { "k8s.example.com" }
+    }
+  }
+  new UnattendedInstallConfig {
+    provisioning {
+      diskSelector {
+        match = #"disk.transport == "nvme""#
+      }
+    }
+  }
+  // A virtual IP that the control plane nodes share on their bond.
+  new Layer2VIPConfig {
+    name = "10.0.0.10"
+    link = "bond0"
+  }
+  new TimeSyncConfig {
+    ntp {
+      servers { "time.cloudflare.com" }
+    }
+    bootTimeout = 2.min
+  }
+  new KubeletConfig {
+    extraArgs {
+      ["rotate-server-certificates"] = "true"
+    }
+  }
+  // Let workloads run on the control plane too.
+  new KubeNodeConfig {
+    taints {
+      ["node-role.kubernetes.io/control-plane"] = patch.deleted
+    }
+  }
+  // Use the cluster's own discovery only.
+  new DiscoveryServiceConfig {
+    name = "default"
+    `$patch` = "delete"
+  }
+}

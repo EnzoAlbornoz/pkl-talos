@@ -1,0 +1,192 @@
+/// A complete machine configuration for a Talos 1.14 control plane node, built from a secrets bundle.
+///
+/// ```
+/// talosctl gen secrets -o examples/complete/secrets.yaml
+/// pkl eval examples/complete/controlplane.pkl -o controlplane.yaml
+/// talosctl validate --config controlplane.yaml --mode metal
+/// ```
+///
+/// Read the secrets bundle from somewhere else with `-p secrets=<uri>`, such as
+/// `-p secrets=file:///etc/talos/secrets.yaml`.
+amends "@talos/MachineConfig.pkl"
+
+import "pkl:yaml"
+
+import "@talos/cluster/DiscoveryIdentityConfig.pkl"
+import "@talos/cluster/DiscoveryServiceConfig.pkl"
+import "@talos/k8s/KubeAggregatorCAConfig.pkl"
+import "@talos/k8s/KubeAPIServerCAConfig.pkl"
+import "@talos/k8s/KubeAPIServerConfig.pkl"
+import "@talos/k8s/KubeAuthorizerConfig.pkl"
+import "@talos/k8s/KubeClusterConfig.pkl"
+import "@talos/k8s/KubeControllerManagerConfig.pkl"
+import "@talos/k8s/KubeCoreDNSConfig.pkl"
+import "@talos/k8s/KubeEtcdEncryptionConfig.pkl"
+import "@talos/k8s/KubeFlannelCNIConfig.pkl"
+import "@talos/k8s/KubeletConfig.pkl"
+import "@talos/k8s/KubeNetworkConfig.pkl"
+import "@talos/k8s/KubeNodeConfig.pkl"
+import "@talos/k8s/KubePrismConfig.pkl"
+import "@talos/k8s/KubeProxyConfig.pkl"
+import "@talos/k8s/KubeSchedulerConfig.pkl"
+import "@talos/k8s/KubeServiceAccountConfig.pkl"
+import "@talos/network/HostnameConfig.pkl"
+import "@talos/network/ResolverConfig.pkl"
+import "@talos/runtime/UnattendedInstallConfig.pkl"
+import "@talos/v1alpha1/Config.pkl"
+import "@talos/version.pkl"
+
+/// The settings of the cluster. Inside a document, a name resolves to the document's own property
+/// first, so `clusterName = clusterName` would not work.
+local settings = new Dynamic {
+  clusterName = "garden"
+  endpoint = "https://k8s.example.com:6443"
+  kubernetesVersion = "1.37.1"
+}
+
+/// The output of `talosctl gen secrets`.
+local secrets: Dynamic = new yaml.Parser {}.parse(read(read?("prop:secrets") ?? "secrets.yaml"))
+
+/// The secrets bundle encodes certificates and keys in base64, as the `v1alpha1` document does;
+/// the other documents take them as PEM.
+local function pem(base64: String): String = base64.base64Decoded
+
+documents {
+  new Config {
+    machine {
+      type = "controlplane"
+      token = secrets.trustdinfo.token
+      ca {
+        crt = secrets.certs.os.crt
+        key = secrets.certs.os.key
+      }
+      certSANs { "k8s.example.com" }
+    }
+    cluster {
+      token = secrets.secrets.bootstraptoken
+      etcd {
+        ca {
+          crt = secrets.certs.etcd.crt
+          key = secrets.certs.etcd.key
+        }
+      }
+    }
+  }
+  new DiscoveryIdentityConfig {
+    clusterID = secrets.cluster.id
+    clusterSecret = secrets.cluster.secret
+  }
+  new DiscoveryServiceConfig {
+    name = "default"
+    endpoint = "https://discovery.talos.dev/"
+  }
+  new UnattendedInstallConfig {
+    installer {
+      image = "ghcr.io/siderolabs/installer:v\(version.talos)"
+    }
+    provisioning {
+      diskSelector {
+        match = #"disk.dev_path == "/dev/sda""#
+      }
+      wipe = false
+    }
+  }
+  new HostnameConfig {
+    auto = "stable"
+  }
+  new ResolverConfig {
+    hostDNS {
+      enabled = true
+      forwardKubeDNSToHost = true
+    }
+  }
+  new KubeClusterConfig {
+    clusterName = settings.clusterName
+    endpoint = settings.endpoint
+  }
+  new KubeNetworkConfig {
+    dnsDomain = "cluster.local"
+    podSubnets { "10.244.0.0/16" }
+    serviceSubnets { "10.96.0.0/12" }
+  }
+  new KubeNodeConfig {
+    labels {
+      ["node.kubernetes.io/exclude-from-external-load-balancers"] = ""
+    }
+    taints {
+      ["node-role.kubernetes.io/control-plane"] = "NoSchedule"
+    }
+  }
+  new KubeAPIServerCAConfig {
+    issuingCA {
+      cert = pem(secrets.certs.k8s.crt)
+      key = pem(secrets.certs.k8s.key)
+    }
+  }
+  new KubeAggregatorCAConfig {
+    issuingCA {
+      cert = pem(secrets.certs.k8saggregator.crt)
+      key = pem(secrets.certs.k8saggregator.key)
+    }
+  }
+  new KubeServiceAccountConfig {
+    issuer {
+      privateKey = pem(secrets.certs.k8sserviceaccount.key)
+      issuerURL = settings.endpoint
+    }
+  }
+  new KubeEtcdEncryptionConfig {
+    config {
+      resources {
+        new {
+          resources { "secrets" }
+          providers {
+            new {
+              secretbox {
+                keys {
+                  new {
+                    name = "key2"
+                    secret = secrets.secrets.secretboxencryptionsecret
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  new KubeAuthorizerConfig {
+    name = "node"
+    type = "Node"
+  }
+  new KubeAuthorizerConfig {
+    name = "rbac"
+    type = "RBAC"
+  }
+  new KubePrismConfig {
+    port = 7445
+  }
+  new KubeAPIServerConfig {
+    image = "registry.k8s.io/kube-apiserver:v\(settings.kubernetesVersion)"
+  }
+  new KubeControllerManagerConfig {
+    image = "registry.k8s.io/kube-controller-manager:v\(settings.kubernetesVersion)"
+  }
+  new KubeSchedulerConfig {
+    image = "registry.k8s.io/kube-scheduler:v\(settings.kubernetesVersion)"
+  }
+  new KubeProxyConfig {
+    image = "registry.k8s.io/kube-proxy:v\(settings.kubernetesVersion)"
+  }
+  new KubeletConfig {
+    image = "ghcr.io/siderolabs/kubelet:v\(settings.kubernetesVersion)"
+    defaultRuntimeSeccompProfileEnabled = true
+  }
+  new KubeFlannelCNIConfig {
+    backendType = "vxlan"
+  }
+  new KubeCoreDNSConfig {
+    enabled = true
+  }
+}
