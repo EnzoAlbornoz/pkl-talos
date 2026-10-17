@@ -1,0 +1,6 @@
+/// Tests of the generated package, which `mise run generate` writes to `build/talos`.
+amends "pkl:Project"
+
+dependencies {
+  ["talos"] = import("../build/talos/PklProject")
+}

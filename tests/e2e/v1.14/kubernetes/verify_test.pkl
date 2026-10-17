@@ -1,0 +1,28 @@
+amends "pkl:test"
+
+import "../../verify.pkl"
+
+local config = verify.parse(read(".out/config.yaml").text)
+
+local kubelet = config.single("KubeletConfig")
+
+facts {
+  ["arguments are merged and deleted"] {
+    kubelet.extraArgs.getProperty("max-pods") == "250"
+    kubelet.extraArgs.getPropertyOrNull("rotate-server-certificates") == null
+    kubelet.extraArgs.getProperty("register-with-taints").toList()
+      == List("dedicated=storage:NoSchedule")
+  }
+
+  ["a map entry is deleted"] {
+    !(config.single("KubeNodeConfig").getPropertyOrNull("taints")?.toMap() ?? Map()).containsKey(
+      "node-role.kubernetes.io/control-plane",
+    )
+  }
+
+  ["documents are added and deleted"] {
+    config.named("KubeStaticPodConfig", "nginx").pod.spec.containers.toList().first.image
+      == "nginx:1.29"
+    config.all("DiscoveryServiceConfig").isEmpty
+  }
+}

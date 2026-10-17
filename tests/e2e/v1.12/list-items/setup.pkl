@@ -1,0 +1,35 @@
+/// Adds the lists whose items `patch.pkl` deletes.
+amends "@talos/ConfigPatch.pkl"
+
+import "@talos/network/NetworkRuleConfig.pkl"
+import "@talos/v1alpha1/Config.pkl"
+
+documents {
+  new Config {
+    machine {
+      logging {
+        destinations {
+          new {
+            endpoint = "udp://127.0.0.1:5000"
+            format = "json_lines"
+          }
+          new {
+            endpoint = "udp://127.0.0.1:5001"
+            format = "json_lines"
+          }
+        }
+      }
+    }
+  }
+  new NetworkRuleConfig {
+    name = "ingress"
+    portSelector {
+      ports { 6443 }
+      protocol = "tcp"
+    }
+    ingress {
+      new { subnet = "10.0.0.0/8" }
+      new { subnet = "192.168.0.0/16" }
+    }
+  }
+}

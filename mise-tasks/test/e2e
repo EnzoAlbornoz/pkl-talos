@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+#MISE description="Apply rendered patches with the matching talosctl and check the results"
+#MISE wait_for=["generate"]
+set -euo pipefail
+
+source "$(dirname "$0")/../../scripts/lib.sh"
+
+talos="$(package_talos_version)"
+line="$(minor_of "$talos")"
+
+# The talosctl release of the package's Talos version, whatever mise.toml pins.
+talosctl() { mise exec "talosctl@$talos" -- talosctl "$@"; }
+
+base="$PWD/build/e2e/controlplane.yaml"
+rm -rf build/e2e
+mkdir -p build/e2e
+talosctl gen config e2e https://10.5.0.2:6443 \
+  --output-types controlplane --with-docs=false --with-examples=false --output "$base" >/dev/null
+
+cd tests
+pkl project resolve >/dev/null
+
+# e2e/v<major>.<minor>/<scenario>/ needs at least that Talos line. Each scenario renders
+# setup.pkl (optional) and patch.pkl, applies them in that order to a generated control plane
+# configuration, validates the result, and checks it with verify_test.pkl.
+for scenario in e2e/v*/*/; do
+  min="$(cut -d/ -f2 <<<"$scenario")"
+  if ! version_le "${min#v}" "$line"; then
+    continue
+  fi
+
+  echo "--- ${scenario%/} (Talos $talos)"
+  out="${scenario}.out"
+  rm -rf "$out"
+  mkdir -p "$out"
+
+  patches=()
+  for name in setup patch; do
+    if [[ -f "$scenario$name.pkl" ]]; then
+      pkl eval "$scenario$name.pkl" -o "$out/$name.yaml"
+      patches+=(--patch "@$out/$name.yaml")
+    fi
+  done
+
+  talosctl machineconfig patch "$base" "${patches[@]}" -o "$out/config.yaml"
+  talosctl validate --config "$out/config.yaml" --mode metal
+  pkl test "${scenario}verify_test.pkl"
+done

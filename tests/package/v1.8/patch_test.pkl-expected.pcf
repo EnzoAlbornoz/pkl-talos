@@ -1,0 +1,45 @@
+examples {
+  ["fields and lists"] {
+    """
+    version: v1alpha1
+    machine:
+      certSANs:
+      - k8s.example.com
+      features:
+        $patch: delete
+      logging:
+        destinations:
+        - endpoint: udp://127.0.0.1:5000
+          format: json_lines
+          extraTags:
+            cluster: garden
+    cluster:
+      adminKubeconfig:
+        certLifetime: 2160h
+    
+    """
+  }
+  ["whole documents"] {
+    """
+    apiVersion: v1alpha1
+    kind: ExtensionServiceConfig
+    name: nut-client
+    $patch: delete
+    ---
+    apiVersion: v1alpha1
+    kind: NetworkRuleConfig
+    name: ingress
+    ingress:
+      $patch: delete
+    
+    """
+  }
+  ["dynamic documents are rendered as they are"] {
+    """
+    machine:
+      install:
+        disk: /dev/sda
+    
+    """
+  }
+}

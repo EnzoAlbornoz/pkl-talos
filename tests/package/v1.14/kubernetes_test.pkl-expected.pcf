@@ -1,0 +1,49 @@
+examples {
+  ["arguments are strings or lists of strings"] {
+    """
+    apiVersion: v1alpha1
+    kind: KubeletConfig
+    extraArgs:
+      max-pods: '250'
+      register-with-taints:
+      - a=b:NoSchedule
+      - c=d:NoExecute
+      rotate-server-certificates:
+        $patch: delete
+    
+    """
+  }
+  ["node labels and taints"] {
+    """
+    apiVersion: v1alpha1
+    kind: KubeNodeConfig
+    labels:
+      topology.kubernetes.io/zone: garden
+      node.kubernetes.io/exclude-from-external-load-balancers:
+        $patch: delete
+    taints:
+      node-role.kubernetes.io/control-plane:
+        $patch: delete
+    
+    """
+  }
+  ["free-form manifests"] {
+    """
+    apiVersion: v1alpha1
+    kind: KubeStaticPodConfig
+    name: nginx
+    pod:
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: nginx
+        labels:
+          app: nginx
+      spec:
+        containers:
+        - name: nginx
+          image: nginx:1.29
+    
+    """
+  }
+}

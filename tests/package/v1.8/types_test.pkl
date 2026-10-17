@@ -1,0 +1,62 @@
+/// Type checks of the generated modules, and the shared helpers.
+amends "pkl:test"
+
+import "pkl:test"
+
+import "@talos/extensions/ExtensionServiceConfig.pkl"
+import "@talos/network/NetworkRuleConfig.pkl"
+import "@talos/schema.pkl"
+import "@talos/v1alpha1/Config.pkl"
+import "@talos/version.pkl"
+
+facts {
+  ["enum values are checked"] {
+    test
+      .catch(() -> new Config { machine { type = "router" } }.machine.type)
+      .startsWith(#"Expected value of type `"controlplane" | "worker" | patch.Delete`"#)
+  }
+
+  ["patterns are checked"] {
+    test
+      .catch(() ->
+        new NetworkRuleConfig { name = "x"; ingress { new { subnet = "10.0.0.0" } } }.ingress[0]
+          .subnet
+      )
+      .contains("Expected value of type `String(contains(Regex(")
+  }
+
+  ["unknown properties are rejected"] {
+    test
+      .catch(() -> new Config { machine { kubelet = "x" } }.machine.toMap())
+      .startsWith("Cannot find property `kubelet`")
+      || test
+        .catch(() -> new Config { machine { notAField = 1 } }.machine.toMap())
+        .startsWith("Cannot find property `notAField`")
+  }
+
+  ["named documents need a name"] {
+    test.catch(() -> new ExtensionServiceConfig {}.name)
+      == "Tried to read property `name` but its value is undefined."
+  }
+
+  ["documents know their apiVersion and kind"] {
+    new NetworkRuleConfig { name = "x" }.apiVersion == "v1alpha1"
+    new NetworkRuleConfig { name = "x" }.kind == "NetworkRuleConfig"
+    new Config {}.version == "v1alpha1"
+  }
+
+  ["durations render as Go durations"] {
+    schema.goDuration(0.s) == "0s"
+    schema.goDuration(90.s) == "90s"
+    schema.goDuration(1.5.h) == "90m"
+    schema.goDuration(2.d) == "48h"
+    schema.goDuration(1500.ms) == "1500ms"
+    schema.goDuration(-5.min) == "-5m"
+    schema.goDuration(250.us) == "250us"
+  }
+
+  ["the package records its Talos version"] {
+    version.talos.matches(Regex(#"\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?"#))
+    version.schemaUrl.contains(version.talos)
+  }
+}

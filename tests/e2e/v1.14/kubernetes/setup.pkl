@@ -1,0 +1,13 @@
+/// Adds what `patch.pkl` changes and deletes.
+amends "@talos/ConfigPatch.pkl"
+
+import "@talos/k8s/KubeletConfig.pkl"
+
+documents {
+  new KubeletConfig {
+    extraArgs {
+      ["max-pods"] = "200"
+      ["rotate-server-certificates"] = "true"
+    }
+  }
+}

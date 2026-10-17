@@ -1,0 +1,27 @@
+amends "pkl:test"
+
+import "../../verify.pkl"
+
+local config = verify.parse(read(".out/config.yaml").text)
+
+local link = config.named("LinkConfig", "eth0")
+
+facts {
+  ["fields are merged"] {
+    link.mtu == 9000
+    config.single("HostnameConfig").hostname == "cp-1"
+  }
+
+  ["list items are added and deleted"] {
+    link.addresses.toList().map((it) -> it.address).sort() == List("10.0.0.2/24", "10.0.0.4/24")
+  }
+
+  ["fields are deleted"] {
+    link.getPropertyOrNull("routes") == null
+    config.single("HostnameConfig").getPropertyOrNull("auto") == null
+  }
+
+  ["map entries are deleted"] {
+    config.named("EthernetConfig", "eth0").features.toMap() == Map("tx-checksumming", true)
+  }
+}

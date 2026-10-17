@@ -1,0 +1,29 @@
+/// Helpers for the `verify_test.pkl` module of an end-to-end scenario, which reads the machine
+/// configuration that `talosctl machineconfig patch` wrote to the scenario's `.out/config.yaml`.
+module verify
+
+import "pkl:yaml"
+
+/// The documents of a machine configuration.
+class Config {
+  documents: List<Dynamic>
+
+  /// The legacy `v1alpha1` document.
+  function legacy(): Dynamic = documents.find((it) -> it.getPropertyOrNull("version") == "v1alpha1")
+
+  /// The documents of [kind].
+  function all(kind: String): List<Dynamic> =
+    documents.filter((it) -> it.getPropertyOrNull("kind") == kind)
+
+  /// The document of [kind] named [name], or `null`.
+  function named(kind: String, name: String): Dynamic? =
+    all(kind).findOrNull((it) -> it.getPropertyOrNull("name") == name)
+
+  /// The only document of [kind], or `null`.
+  function single(kind: String): Dynamic? = all(kind).singleOrNull
+}
+
+/// Reads the machine configuration that the scenario's patches produced.
+function parse(text: String): Config = new {
+  documents = new yaml.Parser {}.parseAll(text).filter((it) -> it != null) as List<Dynamic>
+}

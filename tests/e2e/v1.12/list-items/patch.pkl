@@ -1,0 +1,29 @@
+/// Deletes list items from the legacy `v1alpha1` document and from a named document.
+amends "@talos/ConfigPatch.pkl"
+
+import "@talos/network/NetworkRuleConfig.pkl"
+import "@talos/v1alpha1/Config.pkl"
+
+documents {
+  new Config {
+    machine {
+      logging {
+        destinations {
+          new {
+            endpoint = "udp://127.0.0.1:5000"
+            `$patch` = "delete"
+          }
+        }
+      }
+    }
+  }
+  new NetworkRuleConfig {
+    name = "ingress"
+    ingress {
+      new {
+        subnet = "192.168.0.0/16"
+        `$patch` = "delete"
+      }
+    }
+  }
+}

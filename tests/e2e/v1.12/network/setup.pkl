@@ -1,0 +1,32 @@
+/// Adds what `patch.pkl` changes and deletes.
+amends "@talos/ConfigPatch.pkl"
+
+import "@talos/network/EthernetConfig.pkl"
+import "@talos/network/HostnameConfig.pkl"
+import "@talos/network/LinkConfig.pkl"
+
+documents {
+  new LinkConfig {
+    name = "eth0"
+    addresses {
+      new { address = "10.0.0.3/24" }
+      new { address = "10.0.0.4/24" }
+    }
+    routes {
+      new {
+        destination = "192.168.10.0/24"
+        gateway = "10.0.0.1"
+      }
+    }
+  }
+  new HostnameConfig {
+    auto = "stable"
+  }
+  new EthernetConfig {
+    name = "eth0"
+    features {
+      ["tx-checksumming"] = true
+      ["rx-gro"] = true
+    }
+  }
+}

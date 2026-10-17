@@ -1,0 +1,22 @@
+/// Adds what `patch.pkl` changes and deletes.
+amends "@talos/ConfigPatch.pkl"
+
+import "@talos/extensions/ExtensionServiceConfig.pkl"
+import "@talos/v1alpha1/Config.pkl"
+
+documents {
+  new Config {
+    machine {
+      certSANs { "a.example.com" }
+    }
+  }
+  new ExtensionServiceConfig {
+    name = "nut-client"
+    configFiles {
+      new {
+        content = "MONITOR ups@192.168.1.10 1 remote secret slave"
+        mountPath = "/usr/local/etc/nut/upsmon.conf"
+      }
+    }
+  }
+}

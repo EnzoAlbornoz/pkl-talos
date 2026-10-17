@@ -1,0 +1,45 @@
+/// Changes the Kubernetes documents of Talos 1.14, and deletes map entries and whole documents.
+amends "@talos/ConfigPatch.pkl"
+
+import "@talos/cluster/DiscoveryServiceConfig.pkl"
+import "@talos/k8s/KubeletConfig.pkl"
+import "@talos/k8s/KubeNodeConfig.pkl"
+import "@talos/k8s/KubeStaticPodConfig.pkl"
+import "@talos/patch.pkl"
+
+documents {
+  new KubeletConfig {
+    extraArgs {
+      ["max-pods"] = "250"
+      ["rotate-server-certificates"] = patch.deleted
+      ["register-with-taints"] = new Listing { "dedicated=storage:NoSchedule" }
+    }
+  }
+  new KubeNodeConfig {
+    taints {
+      ["node-role.kubernetes.io/control-plane"] = patch.deleted
+    }
+  }
+  new KubeStaticPodConfig {
+    name = "nginx"
+    pod {
+      apiVersion = "v1"
+      kind = "Pod"
+      metadata {
+        name = "nginx"
+      }
+      spec {
+        containers {
+          new {
+            name = "nginx"
+            image = "nginx:1.29"
+          }
+        }
+      }
+    }
+  }
+  new DiscoveryServiceConfig {
+    name = "default"
+    `$patch` = "delete"
+  }
+}

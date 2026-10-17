@@ -1,0 +1,74 @@
+/// Rendering and checks of `MachineConfig.pkl`, with documents that every supported Talos line has.
+amends "pkl:test"
+
+import "pkl:test"
+
+import "@talos/MachineConfig.pkl"
+import "@talos/network/NetworkRuleConfig.pkl"
+import "@talos/patch.pkl"
+import "@talos/v1alpha1/Config.pkl"
+
+local function render(docs: Listing): String = (MachineConfig) { documents = docs }.output.text
+
+local function problems(docs: Listing): String = test.catch(() -> render(docs))
+
+local config: Config = new {
+  machine {
+    type = "worker"
+    token = "abcdef.0123456789abcdef"
+  }
+}
+
+facts {
+  ["a complete configuration deletes nothing"] {
+    problems(new Listing {
+      (config) {
+        machine {
+          features = patch.deleted
+        }
+      }
+    })
+      .contains(
+        "documents[0] (v1alpha1 config).machine.features: a complete machine configuration cannot delete anything",
+      )
+    problems(new Listing {
+      new NetworkRuleConfig {
+        name = "ingress"
+        `$patch` = "delete"
+      }
+    })
+      .contains(
+        "documents[0] (NetworkRuleConfig \"ingress\"): a complete machine configuration cannot use `$patch`",
+      )
+  }
+
+  ["each document appears once"] {
+    problems(new Listing {
+      config
+      config
+      new NetworkRuleConfig { name = "a" }
+      new NetworkRuleConfig { name = "b" }
+      new NetworkRuleConfig { name = "a" }
+    })
+      // test.catch() joins the lines of the message with spaces.
+      .startsWith(
+        "Invalid machine configuration: - more than one `v1alpha1` document - more than one `v1alpha1/NetworkRuleConfig/a` document",
+      )
+  }
+}
+
+examples {
+  ["documents"] {
+    render(new Listing {
+      config
+      new NetworkRuleConfig {
+        name = "ingress"
+        portSelector {
+          ports { 22; "6443-6444" }
+          protocol = "tcp"
+        }
+        ingress { new { subnet = "10.0.0.0/8" } }
+      }
+    })
+  }
+}

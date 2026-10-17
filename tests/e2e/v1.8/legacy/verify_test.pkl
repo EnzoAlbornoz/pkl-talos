@@ -1,0 +1,25 @@
+amends "pkl:test"
+
+import "../../verify.pkl"
+
+local config = verify.parse(read(".out/config.yaml").text)
+
+local machine = config.legacy().machine
+
+facts {
+  ["lists are merged"] {
+    List("a.example.com", "b.example.com").every((it) -> machine.certSANs.toList().contains(it))
+  }
+
+  ["a field is deleted"] {
+    machine.getPropertyOrNull("features") == null
+  }
+
+  ["a document is deleted"] {
+    config.all("ExtensionServiceConfig").isEmpty
+  }
+
+  ["durations are Go durations"] {
+    config.legacy().cluster.adminKubeconfig.certLifetime.startsWith("2160h")
+  }
+}

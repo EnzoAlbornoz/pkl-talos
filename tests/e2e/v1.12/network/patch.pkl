@@ -1,0 +1,32 @@
+/// Changes multi-document network configuration, and deletes list items, fields and map entries.
+amends "@talos/ConfigPatch.pkl"
+
+import "@talos/network/EthernetConfig.pkl"
+import "@talos/network/HostnameConfig.pkl"
+import "@talos/network/LinkConfig.pkl"
+import "@talos/patch.pkl"
+
+documents {
+  new LinkConfig {
+    name = "eth0"
+    mtu = 9000
+    addresses {
+      new { address = "10.0.0.2/24" }
+      new {
+        address = "10.0.0.3/24"
+        `$patch` = "delete"
+      }
+    }
+    routes = patch.deleted
+  }
+  new HostnameConfig {
+    auto = patch.deleted
+    hostname = "cp-1"
+  }
+  new EthernetConfig {
+    name = "eth0"
+    features {
+      ["rx-gro"] = patch.deleted
+    }
+  }
+}

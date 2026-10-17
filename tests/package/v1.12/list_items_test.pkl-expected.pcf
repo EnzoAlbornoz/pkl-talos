@@ -1,0 +1,21 @@
+examples {
+  ["list items"] {
+    """
+    version: v1alpha1
+    machine:
+      logging:
+        destinations:
+        - endpoint: udp://127.0.0.1:5000
+          $patch: delete
+    ---
+    apiVersion: v1alpha1
+    kind: NetworkRuleConfig
+    name: ingress
+    ingress:
+    - subnet: 10.0.0.0/8
+    - subnet: 192.168.0.0/16
+      $patch: delete
+    
+    """
+  }
+}

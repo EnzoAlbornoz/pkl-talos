@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+#MISE description="Run the Pkl tests against the generated package in build/talos"
+#MISE wait_for=["generate"]
+set -euo pipefail
+
+source "$(dirname "$0")/../../scripts/lib.sh"
+
+talos="$(package_talos_version)"
+line="$(minor_of "$talos")"
+
+cd tests
+pkl project resolve >/dev/null
+
+# package/v<major>.<minor>/ holds the tests that need at least that Talos line.
+tests=()
+for dir in package/v*/; do
+  min="${dir#package/v}"
+  min="${min%/}"
+  if version_le "$min" "$line"; then
+    tests+=("$dir"*_test.pkl)
+  fi
+done
+
+echo "Testing the package for Talos $talos with: ${tests[*]}"
+pkl test "${tests[@]}"

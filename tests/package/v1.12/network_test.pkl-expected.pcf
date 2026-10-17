@@ -1,0 +1,36 @@
+examples {
+  ["links"] {
+    """
+    apiVersion: v1alpha1
+    kind: LinkConfig
+    name: eth0
+    mtu: 9000
+    addresses:
+    - address: 10.0.0.2/24
+    - address: 10.0.0.3/24
+      $patch: delete
+    routes:
+    - destination: 192.168.10.0/24
+      gateway: 10.0.0.1
+    ---
+    apiVersion: v1alpha1
+    kind: HostnameConfig
+    auto:
+      $patch: delete
+    hostname: cp-1
+    
+    """
+  }
+  ["map entries"] {
+    """
+    apiVersion: v1alpha1
+    kind: EthernetConfig
+    name: eth0
+    features:
+      tx-checksumming: false
+      rx-gro:
+        $patch: delete
+    
+    """
+  }
+}

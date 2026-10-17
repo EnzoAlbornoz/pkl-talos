@@ -1,0 +1,66 @@
+/// The Kubernetes configuration documents that Talos 1.14 introduced.
+amends "pkl:test"
+
+import "@talos/ConfigPatch.pkl"
+import "@talos/k8s/KubeletConfig.pkl"
+import "@talos/k8s/KubeNodeConfig.pkl"
+import "@talos/k8s/KubeStaticPodConfig.pkl"
+import "@talos/patch.pkl"
+
+local function render(docs: Listing): String = (ConfigPatch) { documents = docs }.output.text
+
+local class Labels {
+  app: String
+}
+
+examples {
+  ["arguments are strings or lists of strings"] {
+    render(new Listing {
+      new KubeletConfig {
+        extraArgs {
+          ["max-pods"] = "250"
+          ["register-with-taints"] = new Listing { "a=b:NoSchedule"; "c=d:NoExecute" }
+          ["rotate-server-certificates"] = patch.deleted
+        }
+      }
+    })
+  }
+
+  ["node labels and taints"] {
+    render(new Listing {
+      new KubeNodeConfig {
+        labels {
+          ["topology.kubernetes.io/zone"] = "garden"
+          ["node.kubernetes.io/exclude-from-external-load-balancers"] = patch.deleted
+        }
+        taints {
+          ["node-role.kubernetes.io/control-plane"] = patch.deleted
+        }
+      }
+    })
+  }
+
+  ["free-form manifests"] {
+    render(new Listing {
+      new KubeStaticPodConfig {
+        name = "nginx"
+        pod {
+          apiVersion = "v1"
+          kind = "Pod"
+          metadata {
+            name = "nginx"
+            labels = new Labels { app = "nginx" }
+          }
+          spec {
+            containers {
+              new {
+                name = "nginx"
+                image = "nginx:1.29"
+              }
+            }
+          }
+        }
+      }
+    })
+  }
+}

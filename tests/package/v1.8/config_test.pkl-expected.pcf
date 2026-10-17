@@ -1,0 +1,22 @@
+examples {
+  ["documents"] {
+    """
+    version: v1alpha1
+    machine:
+      type: worker
+      token: abcdef.0123456789abcdef
+    ---
+    apiVersion: v1alpha1
+    kind: NetworkRuleConfig
+    name: ingress
+    portSelector:
+      ports:
+      - 22
+      - 6443-6444
+      protocol: tcp
+    ingress:
+    - subnet: 10.0.0.0/8
+    
+    """
+  }
+}

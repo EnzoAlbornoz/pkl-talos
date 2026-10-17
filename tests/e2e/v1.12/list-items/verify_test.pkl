@@ -1,0 +1,17 @@
+amends "pkl:test"
+
+import "../../verify.pkl"
+
+local config = verify.parse(read(".out/config.yaml").text)
+
+facts {
+  ["a list item of the legacy document is deleted"] {
+    config.legacy().machine.logging.destinations.toList().map((it) -> it.endpoint)
+      == List("udp://127.0.0.1:5001")
+  }
+
+  ["a list item of a named document is deleted"] {
+    config.named("NetworkRuleConfig", "ingress").ingress.toList().map((it) -> it.subnet)
+      == List("10.0.0.0/8")
+  }
+}

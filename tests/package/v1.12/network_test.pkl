@@ -1,0 +1,94 @@
+/// The multi-document network configuration that Talos 1.12 introduced.
+amends "pkl:test"
+
+import "pkl:reflect"
+import "pkl:test"
+
+import "@talos/ConfigPatch.pkl"
+import "@talos/MachineConfig.pkl"
+import "@talos/network.pkl"
+import "@talos/network/EthernetConfig.pkl"
+import "@talos/network/HostnameConfig.pkl"
+import "@talos/network/LinkConfig.pkl"
+import "@talos/patch.pkl"
+import "@talos/schema.pkl"
+
+local function render(docs: Listing): String = (ConfigPatch) { documents = docs }.output.text
+
+local function renderConfig(docs: Listing): String =
+  (MachineConfig) { documents = docs }.output.text
+
+facts {
+  ["a complete configuration sets what Talos requires"] {
+    test
+      .catch(() ->
+        renderConfig(new Listing {
+          new LinkConfig {
+            name = "eth0"
+            addresses { new { routePriority = 10 } }
+          }
+        })
+      )
+      .contains(
+        "documents[0] (LinkConfig \"eth0\").addresses[0].address: Talos requires this property",
+      )
+  }
+
+  ["a patch can leave out what Talos requires"] {
+    render(new Listing {
+      new LinkConfig {
+        name = "eth0"
+        addresses { new { routePriority = 10 } }
+      }
+    }).contains("routePriority: 10")
+  }
+
+  ["required properties are annotated"] {
+    reflect.Class(network.AddressConfig).properties["address"].annotations.any((it) ->
+      it is schema.Required
+    )
+    !reflect.Class(network.AddressConfig).properties["routePriority"].annotations.any((it) ->
+      it is schema.Required
+    )
+  }
+}
+
+examples {
+  ["links"] {
+    render(new Listing {
+      new LinkConfig {
+        name = "eth0"
+        mtu = 9000
+        addresses {
+          new { address = "10.0.0.2/24" }
+          new {
+            address = "10.0.0.3/24"
+            `$patch` = "delete"
+          }
+        }
+        routes {
+          new {
+            destination = "192.168.10.0/24"
+            gateway = "10.0.0.1"
+          }
+        }
+      }
+      new HostnameConfig {
+        auto = patch.deleted
+        hostname = "cp-1"
+      }
+    })
+  }
+
+  ["map entries"] {
+    render(new Listing {
+      new EthernetConfig {
+        name = "eth0"
+        features {
+          ["tx-checksumming"] = false
+          ["rx-gro"] = patch.deleted
+        }
+      }
+    })
+  }
+}

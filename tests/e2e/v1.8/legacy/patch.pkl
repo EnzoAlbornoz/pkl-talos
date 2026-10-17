@@ -1,0 +1,24 @@
+/// Changes the legacy `v1alpha1` document, and deletes a field and a document.
+amends "@talos/ConfigPatch.pkl"
+
+import "@talos/extensions/ExtensionServiceConfig.pkl"
+import "@talos/patch.pkl"
+import "@talos/v1alpha1/Config.pkl"
+
+documents {
+  new Config {
+    machine {
+      certSANs { "b.example.com" }
+      features = patch.deleted
+    }
+    cluster {
+      adminKubeconfig {
+        certLifetime = 90.d
+      }
+    }
+  }
+  new ExtensionServiceConfig {
+    name = "nut-client"
+    `$patch` = "delete"
+  }
+}

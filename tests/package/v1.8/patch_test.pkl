@@ -1,0 +1,158 @@
+/// Rendering and checks of `ConfigPatch.pkl`, with documents that every supported Talos line has.
+amends "pkl:test"
+
+import "pkl:test"
+
+import "@talos/ConfigPatch.pkl"
+import "@talos/extensions/ExtensionServiceConfig.pkl"
+import "@talos/network/NetworkRuleConfig.pkl"
+import "@talos/patch.pkl"
+import "@talos/v1alpha1/Config.pkl"
+import "@talos/version.pkl"
+
+local function render(docs: Listing): String = (ConfigPatch) { documents = docs }.output.text
+
+local function problems(docs: Listing): String = test.catch(() -> render(docs))
+
+local deleteListItem: Listing = new {
+  new NetworkRuleConfig {
+    name = "ingress"
+    ingress {
+      new {
+        subnet = "192.168.0.0/16"
+        `$patch` = "delete"
+      }
+    }
+  }
+}
+
+facts {
+  ["list items can be deleted from Talos 1.12 on"] {
+    let (minor = version.talos.split(".")[1].toInt())
+      if (minor >= 12)
+        test.catchOrNull(() -> render(deleteListItem)) == null
+      else
+        problems(deleteListItem)
+          .contains(
+            "documents[0] (NetworkRuleConfig \"ingress\").ingress[0]: Talos \(version.talos) cannot delete list items (Talos 1.12 and later can)",
+          )
+  }
+
+  ["nothing inside a list item can be deleted"] {
+    problems(new Listing {
+      new NetworkRuleConfig {
+        name = "ingress"
+        ingress {
+          new {
+            subnet = "10.0.0.0/8"
+            except = patch.deleted
+          }
+        }
+      }
+    })
+      .contains(
+        "documents[0] (NetworkRuleConfig \"ingress\").ingress[0].except: Talos cannot delete a key inside a list item",
+      )
+  }
+
+  ["a deleted document or object sets nothing else"] {
+    problems(new Listing {
+      new ExtensionServiceConfig {
+        name = "nut-client"
+        environment { "UPS=ups@localhost" }
+        `$patch` = "delete"
+      }
+    })
+      .contains(
+        "documents[0] (ExtensionServiceConfig \"nut-client\"): Talos deletes the whole document marked with `$patch`, so it ignores `environment`",
+      )
+    problems(new Listing {
+      new Config {
+        machine {
+          logging {
+            destinations { new { endpoint = "udp://127.0.0.1:5000" } }
+            `$patch` = "delete"
+          }
+        }
+      }
+    })
+      .contains(
+        "documents[0] (v1alpha1 config).machine.logging: Talos deletes the whole object marked with `$patch`, so it ignores `destinations`",
+      )
+  }
+
+  ["every problem is reported"] {
+    let (
+      message =
+        problems(new Listing {
+          new ExtensionServiceConfig {
+            name = "a"
+            environment { "A=1" }
+            `$patch` = "delete"
+          }
+          new ExtensionServiceConfig {
+            name = "b"
+            environment { "B=1" }
+            `$patch` = "delete"
+          }
+        })
+    )
+      // test.catch() joins the lines of the message with spaces.
+      message.startsWith("Invalid machine configuration patch: - documents[0]")
+        && message.contains(" - documents[1]")
+  }
+}
+
+examples {
+  ["fields and lists"] {
+    render(new Listing {
+      new Config {
+        machine {
+          certSANs { "k8s.example.com" }
+          features = patch.deleted
+          logging {
+            destinations {
+              new {
+                endpoint = "udp://127.0.0.1:5000"
+                format = "json_lines"
+                extraTags {
+                  ["cluster"] = "garden"
+                }
+              }
+            }
+          }
+        }
+        cluster {
+          adminKubeconfig {
+            certLifetime = 90.d
+          }
+        }
+      }
+    })
+  }
+
+  ["whole documents"] {
+    render(new Listing {
+      new ExtensionServiceConfig {
+        name = "nut-client"
+        `$patch` = "delete"
+      }
+      new NetworkRuleConfig {
+        name = "ingress"
+        ingress = patch.deleted
+      }
+    })
+  }
+
+  ["dynamic documents are rendered as they are"] {
+    render(new Listing {
+      new Dynamic {
+        machine {
+          install {
+            disk = "/dev/sda"
+          }
+        }
+      }
+    })
+  }
+}
