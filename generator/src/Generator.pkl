@@ -664,11 +664,30 @@ local function documentProperties(doc: Document, node: Map, scope: Scope): List<
       )
       + (if (doc.isLegacy) List() else List(renderDirective(scope, "", true)))
 
+/// Class names that the generated modules cannot use: names that appear twice in a module, and names
+/// of `pkl:base` types, which the class would hide in its module.
+fixed classNameProblems: List<String> =
+  let (
+    modules =
+      groups.map((it) -> Pair("\(it).pkl", groupClasses(it).map((c) -> c.name)))
+        + documents.map((it) -> Pair(it.path, inlineClasses("", defs[it.def]).map((c) -> c.name)))
+  )
+    modules.flatMap((entry) ->
+      entry.second
+        .filter((it) -> names.baseTypes.contains(it))
+        .map((it) -> "\(entry.first): class `\(it)` would hide the `pkl:base` type")
+        + entry.second
+          .filter((it) -> entry.second.count((other) -> other == it) > 1)
+          .distinct
+          .map((it) -> "\(entry.first): more than one class `\(it)`")
+    )
+
 local generatedModules: List<GeneratedModule> =
-  if (!unsupported.isEmpty)
-    throw("The schema has constructs the generator does not support:\n" + unsupported.join("\n"))
-  else
-    groups.map((it) -> groupModule(it)) + documents.map((it) -> documentModule(it))
+  let (problems = unsupported + classNameProblems)
+    if (!problems.isEmpty)
+      throw("The schema has constructs the generator does not support:\n" + problems.join("\n"))
+    else
+      groups.map((it) -> groupModule(it)) + documents.map((it) -> documentModule(it))
 
 // ----------------------------------------------------------------------------------------------
 // Package files

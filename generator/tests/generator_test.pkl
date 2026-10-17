@@ -87,6 +87,33 @@ facts {
     )
       test.catch(() -> broken.files).contains("example.Part.odd: unsupported keyword `allOf`")
   }
+
+  ["classes do not hide pkl:base types"] {
+    let (
+      renamed = (generated) {
+        schema =
+          fixture.put(
+            "$defs",
+            fixture["$defs"]
+              .remove("example.Part")
+              .put("example.Duration", fixture["$defs"]["example.Part"])
+              .put(
+                "example.WidgetConfigV1Alpha1",
+                fixture["$defs"]["example.WidgetConfigV1Alpha1"].put(
+                  "properties",
+                  fixture["$defs"]["example.WidgetConfigV1Alpha1"]["properties"].put(
+                    "parts",
+                    Map("items", Map("$ref", "#/$defs/example.Duration"), "type", "array"),
+                  ),
+                ),
+              ),
+          )
+      }
+    )
+      test
+        .catch(() -> renamed.files)
+        .contains("example.pkl: class `Duration` would hide the `pkl:base` type")
+  }
 }
 
 examples {

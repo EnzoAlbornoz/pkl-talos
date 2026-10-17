@@ -10,7 +10,7 @@
 ///   new Config {
 ///     machine {
 ///       type = "worker"
-///       token = read("env:MACHINE_TOKEN").text
+///       token = read("env:MACHINE_TOKEN")
 ///       // ...
 ///     }
 ///   }
