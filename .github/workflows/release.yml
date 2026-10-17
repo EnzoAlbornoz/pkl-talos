@@ -1,0 +1,175 @@
+name: release
+
+# Publishes a package version, talos@<line>.<n>, for every Talos line whose package changed: when
+# Talos releases a new version (checked daily), when the generator or the package sources change
+# on main, or on demand. generator/src/Planner.pkl decides what to publish.
+
+on:
+  schedule:
+    - cron: "23 6 * * *"
+  push:
+    branches: [main]
+    paths:
+      - generator/**
+      - package/**
+      - mise.toml
+      - .github/workflows/release.yml
+  workflow_dispatch:
+    inputs:
+      lines:
+        description: Comma-separated Talos lines to publish, such as 1.13,1.14 (default every line)
+        required: false
+        default: ""
+      prereleases:
+        description: Also publish packages for lines that only have Talos pre-releases
+        type: boolean
+        default: false
+      dry-run:
+        description: Plan and build, but publish nothing
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    outputs:
+      releases: ${{ steps.plan.outputs.releases }}
+      count: ${{ steps.plan.outputs.count }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@9b200bcecbfd6303e69a4a261b2e09e3757440a7 # v5.2.0
+        with:
+          cache: false # Release from a clean state.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - run: mise run test:generator
+      - name: Plan the releases
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LINES: ${{ inputs.lines }}
+          PRERELEASES: ${{ inputs.prereleases }}
+        run: |
+          args=()
+          if [[ -n "$LINES" ]]; then
+            args+=(--lines "$LINES")
+          fi
+          if [[ "$PRERELEASES" == "true" ]]; then
+            args+=(--prereleases)
+          fi
+          plan="$(mise run --quiet release:plan "${args[@]}")"
+          releases="$(jq -c .releases <<<"$plan")"
+          {
+            echo "releases=$releases"
+            echo "count=$(jq length <<<"$releases")"
+          } >>"$GITHUB_OUTPUT"
+          {
+            echo "## Release plan"
+            echo
+            jq -r '.releases[] | "- `talos@\(.version)` from Talos \(.talos): \(.reason)"' <<<"$plan"
+            jq -r 'if (.releases | length) == 0 then "Every package is up to date." else empty end' <<<"$plan"
+          } >>"$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: Build talos@${{ matrix.version }}
+    needs: plan
+    if: needs.plan.outputs.count != '0'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.releases) }}
+    env:
+      TALOS_VERSION: ${{ matrix.talos }}
+      PACKAGE_VERSION: ${{ matrix.version }}
+      PLANNED_DIGEST: ${{ matrix.digest }}
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@9b200bcecbfd6303e69a4a261b2e09e3757440a7 # v5.2.0
+        with:
+          cache: false # Release from a clean state.
+      - run: mise run generate --version "$PACKAGE_VERSION"
+      - name: Check that the package is the planned one
+        run: |
+          digest="$(mise exec -- pkl eval generator/generate.pkl -p "talosVersion=$TALOS_VERSION" -x digest)"
+          if [[ "$digest" != "$PLANNED_DIGEST" ]]; then
+            echo "::error::The package digest $digest differs from the planned $PLANNED_DIGEST."
+            exit 1
+          fi
+      - run: mise run test:package
+      - run: mise run test:e2e
+      - run: mise run test:examples
+      - run: mise run package
+      - name: Write the release notes
+        run: |
+          mise exec -- pkl eval generator/generate.pkl \
+            -p "talosVersion=$TALOS_VERSION" -p "packageVersion=$PACKAGE_VERSION" -x releaseNotes \
+            >"build/release/talos@$PACKAGE_VERSION/notes.md"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: talos@${{ matrix.version }}
+          path: build/release/talos@${{ matrix.version }}/
+          if-no-files-found: error
+
+  # Publishing runs apart from the build, which runs third-party tools, so that only this job can
+  # write to the repository. A line whose build failed fails here too, without holding back the
+  # other lines.
+  release:
+    name: Publish talos@${{ matrix.version }}
+    needs: [plan, build]
+    if: ${{ !cancelled() && needs.plan.outputs.count != '0' && !inputs.dry-run }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.releases) }}
+    permissions:
+      contents: write # Create the release.
+      id-token: write # Sign the provenance attestation.
+      attestations: write # Store the provenance attestation.
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: talos@${{ matrix.version }}
+          path: dist
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*.zip
+      - name: Publish the release
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ matrix.version }}
+          TALOS: ${{ matrix.talos }}
+          PRERELEASE: ${{ matrix.prerelease }}
+          LATEST: ${{ matrix.latest }}
+        run: |
+          tag="talos@$VERSION"
+          set -- --repo "$GITHUB_REPOSITORY" --title "$tag (Talos v$TALOS)" --notes-file notes.md \
+            --target "$GITHUB_SHA" --latest="$LATEST"
+          if [[ "$PRERELEASE" == "true" ]]; then
+            set -- "$@" --prerelease
+          fi
+          # A draft left behind by a failed run is replaced. Published releases are never
+          # touched: the plan only picks versions that do not exist yet.
+          if [[ "$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null)" == "true" ]]; then
+            gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
+          fi
+          # Publish only once every file is attached, which immutable releases require.
+          gh release create "$tag" --draft "$@" "$tag" "$tag.sha256" "$tag.zip" "$tag.zip.sha256"
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false
+          echo "Published \`$tag\` from Talos $TALOS." >>"$GITHUB_STEP_SUMMARY"

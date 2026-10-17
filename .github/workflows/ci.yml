@@ -1,0 +1,73 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  generator:
+    name: Lint and test the generator
+    runs-on: ubuntu-latest
+    outputs:
+      targets: ${{ steps.targets.outputs.targets }}
+      newest: ${{ steps.targets.outputs.newest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@9b200bcecbfd6303e69a4a261b2e09e3757440a7 # v5.2.0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - run: mise run lint
+      - run: mise run test:generator
+      - name: List the Talos releases to test
+        id: targets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          plan="$(mise run --quiet release:plan)"
+          {
+            echo "targets=$(jq -c .targets <<<"$plan")"
+            echo "newest=$(jq -r '.targets[-1]' <<<"$plan")"
+          } >>"$GITHUB_OUTPUT"
+
+  package:
+    name: Talos ${{ matrix.talos }}${{ matrix.pkl && format(' with Pkl {0}', matrix.pkl) || '' }}
+    needs: generator
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        talos: ${{ fromJSON(needs.generator.outputs.targets) }}
+        # Empty: the Pkl version that mise.toml pins.
+        pkl: [""]
+        include:
+          # The oldest Pkl release that the packages support, with the newest Talos line.
+          - talos: ${{ needs.generator.outputs.newest }}
+            pkl: 0.30.2
+    env:
+      TALOS_VERSION: ${{ matrix.talos }}
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Use Pkl ${{ matrix.pkl }}
+        if: matrix.pkl != ''
+        env:
+          PKL_VERSION: ${{ matrix.pkl }}
+        run: echo "MISE_PKL_VERSION=$PKL_VERSION" >>"$GITHUB_ENV"
+      - uses: jdx/mise-action@9b200bcecbfd6303e69a4a261b2e09e3757440a7 # v5.2.0
+      - run: mise run generate
+      - run: mise run test:package
+      - run: mise run test:e2e
+      - run: mise run test:examples
+      - run: mise run package

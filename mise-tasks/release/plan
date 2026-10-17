@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+#MISE description="Plan which package versions to publish, as JSON"
+#USAGE flag "--lines <lines>" help="Comma-separated Talos lines to plan for, such as 1.13,1.14 (default: every line)"
+#USAGE flag "--prereleases" help="Also plan packages for lines that only have Talos pre-releases"
+set -euo pipefail
+
+repository="${GITHUB_REPOSITORY:-$(gh repo view --json nameWithOwner --jq .nameWithOwner)}"
+
+mkdir -p build/release
+gh api --paginate repos/siderolabs/talos/releases \
+  --jq '.[] | {tag_name, draft, prerelease}' >build/release/talos-releases.jsonl
+gh api --paginate "repos/$repository/releases" \
+  --jq '.[] | {tag_name, draft, prerelease, body}' >build/release/published-releases.jsonl
+
+args=()
+if [[ -n "${usage_lines:-}" ]]; then
+  args+=(-p "lines=$usage_lines")
+fi
+if [[ "${usage_prereleases:-false}" == "true" ]]; then
+  args+=(-p includePrereleases=true)
+fi
+
+pkl eval generator/plan.pkl "${args[@]}"

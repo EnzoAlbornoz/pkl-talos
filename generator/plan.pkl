@@ -1,0 +1,50 @@
+/// Plans which package versions to publish (see `src/Planner.pkl`), as JSON: `targets` lists the
+/// newest stable Talos release of every line, which CI tests, and `releases` the packages to publish.
+///
+/// `mise run release:plan` writes the Talos releases and this repository's releases, as JSON Lines,
+/// to `build/release/`, then evaluates this module:
+///
+/// ```
+/// pkl eval generator/plan.pkl [-p lines=1.13,1.14] [-p includePrereleases=true]
+/// ```
+amends "src/Planner.pkl"
+
+import "src/Generator.pkl"
+import "src/json.pkl"
+import "src/sources.pkl"
+
+talosReleases = jsonLines("../build/release/talos-releases.jsonl")
+
+publishedReleases = jsonLines("../build/release/published-releases.jsonl")
+
+lines =
+  (read?("prop:lines") ?? "")
+    .split(",")
+    .map((it) -> it.trim())
+    .filter((it) -> !it.isEmpty)
+
+includePrereleases = read?("prop:includePrereleases") == "true"
+
+// The same inputs as generate.pkl, so that the digests match the packages it generates.
+digestOf = (release) ->
+  (Generator) {
+    talosVersion = release
+    schemaUrl = sources.urlOf(release)
+    schema = json.parse(read(schemaUrl).text) as Map
+    supportFiles = sources.supportFiles
+  }.digest
+
+/// The objects of a JSON Lines file, which `gh api --jq` writes.
+local function jsonLines(path: String): List<Map> =
+  read(path).text
+    .split("\n")
+    .filter((it) -> !it.trim().isEmpty)
+    .map((it) -> json.parse(it) as Map)
+
+output {
+  value = new Dynamic {
+    targets = module.targets
+    releases = module.releases
+  }
+  renderer = new JsonRenderer {}
+}
