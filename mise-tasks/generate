@@ -15,7 +15,8 @@ args=(-p "talosVersion=$talos")
 
 rm -rf "$out"
 pkl eval -m "$out" generator/generate.pkl "${args[@]}" >/dev/null
-# The generator writes valid but unformatted code; the formatter wraps long lines.
-pkl format --write "$out" >/dev/null
+# The generator writes valid but unformatted code; the formatter wraps long lines. Some Pkl
+# releases exit with 11 when they changed files.
+pkl format --write "$out" >/dev/null || [[ $? -eq 11 ]]
 
 echo "Generated $(find "$out" -name '*.pkl' | wc -l | tr -d ' ') modules for Talos $talos in $out"

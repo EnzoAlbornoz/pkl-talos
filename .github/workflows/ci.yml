@@ -60,13 +60,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: jdx/mise-action@9b200bcecbfd6303e69a4a261b2e09e3757440a7 # v5.2.0
+      # Releases generate and package with the pinned Pkl; users may evaluate them with another.
+      - run: mise run generate
       - name: Use Pkl ${{ matrix.pkl }}
         if: matrix.pkl != ''
         env:
           PKL_VERSION: ${{ matrix.pkl }}
-        run: echo "MISE_PKL_VERSION=$PKL_VERSION" >>"$GITHUB_ENV"
-      - uses: jdx/mise-action@9b200bcecbfd6303e69a4a261b2e09e3757440a7 # v5.2.0
-      - run: mise run generate
+        run: |
+          mise install "pkl@$PKL_VERSION"
+          echo "MISE_PKL_VERSION=$PKL_VERSION" >>"$GITHUB_ENV"
       - run: mise run test:package
       - run: mise run test:e2e
       - run: mise run test:examples

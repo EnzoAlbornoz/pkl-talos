@@ -10,7 +10,7 @@ zizmor = "1.31.1"
 [env]
 # Talos release that `mise run generate` and the tests use; override it to work on another line,
 # for example `TALOS_VERSION=1.13.11 mise run test`.
-TALOS_VERSION = "1.14.4"
+TALOS_VERSION = "{{ get_env(name='TALOS_VERSION', default='1.14.4') }}"
 
 [tasks.fmt]
 description = "Format the hand-written Pkl sources"

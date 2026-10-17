@@ -86,3 +86,17 @@ To see what the next run would publish:
 ```console
 $ mise run release:plan
 ```
+
+### Publishing from a new repository
+
+The package URIs follow the repository that publishes them, so a fork publishes its own packages.
+
+1. Create the repository on GitHub, public so that Pkl can download the releases without
+   credentials, and push `main`. The push starts the release workflow, which publishes a package
+   for every Talos line; start it from the Actions tab with `dry-run` first if you'd rather check
+   the plan.
+2. In the repository settings, enable release immutability (Settings → General → Releases), so that
+   GitHub refuses to change a published package. The workflow already publishes each release as a
+   draft first and only makes it public once every file is attached.
+3. Keep "Read repository contents" as the default workflow permission: the release job asks for
+   `contents: write` itself.

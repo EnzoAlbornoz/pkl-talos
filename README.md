@@ -80,7 +80,8 @@ documents {
 }
 ```
 
-Releases are immutable: a published version never changes.
+A published version never changes: releases only ever add versions, so the checksums in your
+`PklProject.deps.json` stay valid.
 
 ## Writing patches
 
